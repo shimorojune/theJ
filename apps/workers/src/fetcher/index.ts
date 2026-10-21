@@ -2,8 +2,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type FetchJob, QUEUES } from "@thej/shared";
 import { Worker } from "bullmq";
 import { connection } from "../lib/redis";
-import { audioKey, uploadAudio } from "../lib/s3";
+import { audioKey, ensureBucket, uploadAudio } from "../lib/s3";
 import { downloadAudio } from "./ytdlp";
+
+await ensureBucket();
 
 const concurrency = Number(process.env.FETCH_CONCURRENCY ?? 2);
 const jitter = () => sleep(2000 + Math.random() * 4000);

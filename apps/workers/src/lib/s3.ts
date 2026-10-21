@@ -1,6 +1,11 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  CreateBucketCommand,
+  HeadBucketCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 const bucket = process.env.S3_BUCKET ?? "audio";
 
@@ -14,6 +19,15 @@ export const s3 = new S3Client({
     secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "",
   },
 });
+
+/** Creates the audio bucket on first run. */
+export async function ensureBucket() {
+  try {
+    await s3.send(new HeadBucketCommand({ Bucket: bucket }));
+  } catch {
+    await s3.send(new CreateBucketCommand({ Bucket: bucket }));
+  }
+}
 
 export const audioKey = (videoId: string) => `m4a/${videoId}.m4a`;
 

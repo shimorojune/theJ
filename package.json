@@ -12,7 +12,6 @@
     "dev:analysis": "pnpm --filter @thej/workers dev:analysis",
     "dev:planner": "pnpm --filter @thej/workers dev:planner",
     "dev:mobile": "pnpm --filter @thej/mobile start",
-    "dev:web": "pnpm --filter @thej/web dev",
     "infra:up": "docker compose -f infra/dev.compose.yml up -d",
     "infra:down": "docker compose -f infra/dev.compose.yml down",
     "db:generate": "pnpm --filter @thej/db generate",

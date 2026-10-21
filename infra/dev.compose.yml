@@ -1,4 +1,6 @@
+name: thej
 # Local dev services. `pnpm infra:up` from the repo root.
+# The audio bucket is created by the workers on startup (ensureBucket).
 services:
   postgres:
     image: postgres:17-alpine
@@ -11,19 +13,13 @@ services:
     command: ["redis-server", "--maxmemory-policy", "noeviction"]
     ports: ["6379:6379"]
 
+  # minio/minio is no longer published on Docker Hub; Chainguard's build is the same MinIO server.
   minio:
-    image: minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     command: ["server", "/data", "--console-address", ":9001"]
     environment: { MINIO_ROOT_USER: thej, MINIO_ROOT_PASSWORD: thej-dev-secret }
     ports: ["9000:9000", "9001:9001"]
     volumes: [minio-data:/data]
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on: [minio]
-    entrypoint: >
-      sh -c "until mc alias set local http://minio:9000 thej thej-dev-secret; do sleep 1; done;
-             mc mb -p local/audio"
 
 volumes:
   pg-data:
