@@ -10,6 +10,7 @@
     "dev:analysis": "bun --filter @thej/workers dev:analysis",
     "dev:planner": "bun --filter @thej/workers dev:planner",
     "dev:mobile": "bun --filter @thej/mobile start",
+    "dev:web": "bun --filter @thej/web dev",
     "infra:up": "docker compose -f infra/dev.compose.yml up -d",
     "infra:down": "docker compose -f infra/dev.compose.yml down",
     "db:generate": "bun --filter @thej/db generate",

@@ -11,6 +11,7 @@ service that fetches songs with yt-dlp, analyses them once, and plans the queue.
 ```
 apps/
   mobile/    Expo 58 Android app (Expo Router, Clerk, react-native-track-player)
+  web/       PWA, mobile view only (Vite, React, Clerk, <audio> + Media Session)
   api/       Hono on Bun: Clerk JWT auth, sessions, SSE, signed audio URLs
   workers/   BullMQ workers, one entrypoint each: fetcher, analysis, planner
 packages/
@@ -30,6 +31,12 @@ bun run infra:up
 bun run db:generate && bun run db:migrate
 bun run dev:api          # http://localhost:3000/health
 bun run dev:fetcher      # needs yt-dlp + ffmpeg locally, or run it on Dokploy
+```
+
+Web PWA (open on your phone over the LAN, then "Add to Home screen"):
+
+```sh
+bun run dev:web                  # vite --host, proxies /api to localhost:3000
 ```
 
 Mobile (needs a dev build, not Expo Go, because of track-player):
