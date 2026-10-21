@@ -3,7 +3,7 @@ import { useHostedAuth } from "@clerk/expo/hosted-auth";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { c } from "../src/theme";
 import { s as kit, PrimaryButton, Screen } from "../src/ui/kit";
 
@@ -36,6 +36,7 @@ export default function SignIn() {
   const { startSSOFlow } = useSSO();
   const { startHostedAuth } = useHostedAuth();
   const [busy, setBusy] = useState(false);
+  const tile = (useWindowDimensions().width + 60 - 30) / 4;
   const [error, setError] = useState<string | null>(null);
 
   const google = async () => {
@@ -69,9 +70,13 @@ export default function SignIn() {
       <View pointerEvents="none" style={st.tiles}>
         {TILES.map((bg, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid
-          <View key={`${bg}${i}`} style={[st.tile, { backgroundColor: bg }]} />
+          <View
+            key={`${bg}${i}`}
+            style={[st.tile, { width: tile, height: tile, backgroundColor: bg }]}
+          />
         ))}
       </View>
+      <View pointerEvents="none" style={st.fadeTop} />
       <View pointerEvents="none" style={st.fade} />
       <View style={{ marginTop: "auto", gap: 12 }}>
         <Text style={st.brand}>theJ</Text>
@@ -101,8 +106,16 @@ const st = StyleSheet.create({
     gap: 10,
     transform: [{ rotate: "-8deg" }],
   },
-  tile: { width: "22.5%", aspectRatio: 1, borderRadius: 6 },
-  fade: { ...StyleSheet.absoluteFill, backgroundColor: "rgba(11,11,12,0.55)" },
+  tile: { borderRadius: 6 },
+  fade: { position: "absolute", left: 0, right: 0, top: "35%", bottom: 0, backgroundColor: c.bg },
+  fadeTop: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    top: 0,
+    height: "35%",
+    backgroundColor: "rgba(11,11,12,0.35)",
+  },
   brand: { color: c.fg, fontSize: 40, fontWeight: "600", letterSpacing: -1.4 },
   email: {
     height: 52,
