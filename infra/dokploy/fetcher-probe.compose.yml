@@ -4,7 +4,7 @@
 #
 # Dokploy > Compose > Environment:
 #   TS_AUTHKEY      Tailscale auth key, created with tag:deejay-fetcher (not ephemeral)
-#   HOME_PROXY_IP   home proxy's 100.x.y.z address (live: Umbrel's node, 100.104.87.114)
+#   HOME_PROXY_IP   home proxy's 100.x.y.z address (live: Umbrel's own node)
 #   PROXY_PASS      same value as on the home stack
 #   FALLBACK_PROXY  optional, residential proxy URL used when home is down (later)
 services:

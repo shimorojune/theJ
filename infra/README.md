@@ -15,7 +15,7 @@ No secret values live here. They come from Dokploy / Portainer environment varia
 fetcher + bgutil → tailscale sidecar (`deejay-fetcher`) → tailnet → home gost `:1080` → YouTube from the residential IP.
 The home box only forwards traffic. yt-dlp, Deno, bgutil and nightly updates all run on the VPS.
 
-Live: `HOME_PROXY_IP` is Umbrel's own Tailscale IP (100.104.87.114). The proxy is also reachable on the home LAN
+Live: `HOME_PROXY_IP` is Umbrel's own Tailscale IP (see the Tailscale admin). The proxy is also reachable on the home LAN
 (password-protected); make sure the router does not forward port 1080.
 
 ## Setup (hardened version)
