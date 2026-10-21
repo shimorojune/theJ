@@ -1,10 +1,12 @@
 import { sessions, tracks, users } from "@thej/db";
 import { type PlanJob, PRIORITY, QUEUES } from "@thej/shared";
 import { Worker } from "bullmq";
-import { and, arrayOverlaps, eq, lt } from "drizzle-orm";
+import { and, arrayOverlaps, count, eq, lt } from "drizzle-orm";
 import { db } from "../lib/db";
 import { enqueueFetch } from "../lib/queues";
 import { connection } from "../lib/redis";
+import { resolveSong } from "../lib/resolve";
+import { seedStarter } from "../lib/starter";
 
 /**
  * Refill: a session is running low on ready songs. For now, fetch known-but-unfetched tracks in
@@ -42,3 +44,17 @@ worker.on("failed", (job, err) =>
   console.error(`plan failed ${job?.data.sessionId}: ${err.message}`),
 );
 console.log("planner worker up");
+
+// A fresh install has nothing to play: put the starter shelf in the fetch queue once.
+const [{ n }] = (await db.select({ n: count() }).from(tracks)) as [{ n: number }];
+if (n < 20) {
+  console.log(`only ${n} tracks known; seeding the starter shelf`);
+  const queued = await seedStarter({
+    resolve: resolveSong,
+    insert: async (t) => {
+      await db.insert(tracks).values(t).onConflictDoNothing();
+    },
+    enqueue: (id) => enqueueFetch(id, PRIORITY.prefetch),
+  });
+  console.log(`starter shelf: ${queued} songs queued for fetching`);
+}

@@ -7,3 +7,5 @@
 - Mobile deps: add with `npx expo install <pkg>` (from apps/mobile) so versions match the Expo SDK.
 - Never commit secrets (proxy password, Tailscale keys, Clerk secret, keystores). Use `.env` locally, Dokploy env in prod.
 - Tailscale node/tag names keep the `deejay-` prefix because they are live.
+- Mobile playback uses expo-audio's AudioPlaylist mirrored from the server's committed queue (src/party/PartyProvider.tsx); the server decides what plays.
+- The api lives at https://thej.rraj.dev (Dokploy domain on the `api` service).

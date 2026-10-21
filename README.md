@@ -9,7 +9,7 @@ service that fetches songs with yt-dlp, analyses them once, and plans the queue.
 
 ```
 apps/
-  mobile/    Expo 58 Android app (Expo Router, Clerk, react-native-track-player)
+  mobile/    Expo 58 Android app (Expo Router, Clerk, expo-audio playlist + lock screen)
   api/       Hono on Node: Clerk JWT auth, sessions, SSE, signed audio URLs
   workers/   BullMQ workers, one entrypoint each: fetcher, analysis, planner
 packages/

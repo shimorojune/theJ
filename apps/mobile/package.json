@@ -2,7 +2,7 @@
   "name": "@thej/mobile",
   "version": "0.0.0",
   "private": true,
-  "main": "index.ts",
+  "main": "expo-router/entry",
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
@@ -11,13 +11,18 @@
   },
   "dependencies": {
     "@clerk/expo": "^4.14.0",
+    "@expo/vector-icons": "^15.0.2",
     "@tanstack/react-query": "^5.104.5",
     "@thej/shared": "workspace:*",
     "expo": "~58.0.16",
+    "expo-audio": "~58.0.10",
     "expo-auth-session": "~58.0.0",
     "expo-constants": "~58.0.12",
     "expo-crypto": "~58.0.0",
     "expo-dev-client": "~58.0.14",
+    "expo-haptics": "~58.0.7",
+    "expo-image": "~58.0.16",
+    "expo-linear-gradient": "~58.0.3",
     "expo-linking": "~58.0.13",
     "expo-router": "~58.0.24",
     "expo-secure-store": "~58.0.2",
@@ -29,7 +34,7 @@
     "react-native": "0.88.0",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
-    "react-native-track-player": "^4.1.2"
+    "react-native-sse": "^1.2.1"
   },
   "devDependencies": {
     "@thej/api": "workspace:*",
