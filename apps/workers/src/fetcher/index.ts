@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
+import { audioKey, ensureBucket, uploadAudio } from "@thej/core";
 import { tracks } from "@thej/db";
 import { type FetchJob, QUEUES } from "@thej/shared";
 import { Worker } from "bullmq";
@@ -6,7 +7,6 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "../lib/db";
 import { enqueueAnalyse } from "../lib/queues";
 import { connection } from "../lib/redis";
-import { audioKey, ensureBucket, uploadAudio } from "../lib/s3";
 import { Egress, isBotCheck } from "./egress";
 import { downloadAudio } from "./ytdlp";
 

@@ -43,9 +43,9 @@ export const QueueTrack = z.object({
 });
 export type QueueTrack = z.infer<typeof QueueTrack>;
 
-/** SSE payload pushed to the app whenever the committed queue changes. */
+/** SSE payload whenever the committed queue changes: the current song plus the next 2. */
 export const QueueEvent = z.object({
   sessionId: z.string(),
-  committed: z.array(QueueTrack).max(2),
+  committed: z.array(QueueTrack).max(3),
 });
 export type QueueEvent = z.infer<typeof QueueEvent>;

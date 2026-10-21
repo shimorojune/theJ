@@ -7,17 +7,20 @@
     ".": "./src/app.ts"
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/index.ts",
+    "dev": "DEV_AUTH=1 tsx watch --env-file-if-exists=../../.env src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "cli": "tsx src/cli.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.26.1",
     "@hono/node-server": "^2.1.5",
     "@hono/zod-validator": "^0.9.1",
+    "@thej/core": "workspace:*",
     "@thej/db": "workspace:*",
     "@thej/shared": "workspace:*",
     "bullmq": "^6.4.0",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "ioredis": "^6.0.0",
     "tsx": "^4.23.15",

@@ -44,6 +44,18 @@ pnpm workers:logs
 Downloads go direct unless `HOME_PROXY` is set. That's fine when the Mac is on the home network
 (same exit IP as the proxy). Elsewhere, run `pnpm proxy:forward` and set `HOME_PROXY` as in `.env.example`.
 
+Engine + api from the terminal (dev auth, no Clerk needed locally):
+
+```sh
+pnpm dev:api                     # DEV_AUTH=1: accepts x-dev-user instead of a Clerk token
+pnpm cli start en,hi 0.3 0.4     # start a party at low energy, mid-low mood
+pnpm cli queue                   # now playing, next 2, projected plan
+pnpm cli hype [now]              # buttons: hype / chill / brighter / moodier, "now" = long press
+pnpm cli play 4                  # finish 4 songs, watch the target ramp
+pnpm cli watch                   # follow the SSE stream
+pnpm test                        # engine + signing unit tests
+```
+
 Mobile (needs a dev build, not Expo Go, because of track-player):
 
 ```sh

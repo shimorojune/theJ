@@ -1,13 +1,13 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { downloadObject } from "@thej/core";
 import { tracks } from "@thej/db";
 import { type AnalyseJob, QUEUES } from "@thej/shared";
 import { DelayedError, Worker } from "bullmq";
 import { eq } from "drizzle-orm";
 import { db } from "../lib/db";
 import { connection } from "../lib/redis";
-import { downloadObject } from "../lib/s3";
 import { cutClip, probeDuration } from "./clip";
 import { wordsPerMinute } from "./lyrics";
 import { extractFeatures, RateLimited } from "./reccobeats";

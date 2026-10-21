@@ -7,5 +7,12 @@ export const env = z
     REDIS_URL: z.string().url(),
     CLERK_SECRET_KEY: z.string().default(""),
     AUDIO_URL_SIGNING_SECRET: z.string().min(8),
+    /** Base URL the phone uses for this api; audio URLs are signed against it. */
+    PUBLIC_API_URL: z.string().url().default("http://localhost:3000"),
+    /** Dev only: accept `x-dev-user: <id>` instead of a Clerk token. Ignored in production. */
+    DEV_AUTH: z.enum(["0", "1"]).default("0"),
+    NODE_ENV: z.string().default("development"),
   })
   .parse(process.env);
+
+export const devAuth = env.DEV_AUTH === "1" && env.NODE_ENV !== "production";

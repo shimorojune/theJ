@@ -24,7 +24,9 @@
     "seed": "pnpm --filter @thej/workers seed",
     "status": "pnpm --filter @thej/workers status",
     "proxy:forward": "node infra/scripts/tailnet-forward.mjs",
-    "requeue": "pnpm --filter @thej/workers requeue"
+    "requeue": "pnpm --filter @thej/workers requeue",
+    "cli": "pnpm --silent --filter @thej/api cli",
+    "test": "pnpm -r --if-present test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",

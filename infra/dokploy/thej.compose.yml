@@ -2,7 +2,7 @@
 # Secrets come from Dokploy > Compose > Environment:
 #   required: POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD, AUDIO_URL_SIGNING_SECRET,
 #             TS_AUTHKEY, HOME_PROXY_IP, PROXY_PASS
-#   later:    CLERK_SECRET_KEY, LASTFM_API_KEY, OPENROUTER_API_KEY, LLM_*_MODEL, FALLBACK_PROXY
+#   later:    PUBLIC_API_URL (the api's domain), CLERK_SECRET_KEY, LASTFM_API_KEY, OPENROUTER_API_KEY, LLM_*_MODEL, FALLBACK_PROXY
 # api is the only service with a public domain (via Dokploy Traefik on dokploy-network).
 # The compose keeps the probe's project name, so the Tailscale node identity (ts-state) carries over.
 services:
@@ -17,6 +17,8 @@ services:
       S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET:?set AUDIO_URL_SIGNING_SECRET}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:3000}
+      NODE_ENV: production
     depends_on: &after-migrate
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_started }

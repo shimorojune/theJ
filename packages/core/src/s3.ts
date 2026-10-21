@@ -1,6 +1,6 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import type { Readable } from "node:stream";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   CreateBucketCommand,
@@ -51,4 +51,16 @@ export async function uploadAudio(key: string, path: string): Promise<number> {
 export async function downloadObject(key: string, path: string): Promise<void> {
   const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
   await pipeline(res.Body as Readable, createWriteStream(path));
+}
+
+/** Streams a stored song, honouring an HTTP Range header so players can seek. */
+export async function getAudio(key: string, range?: string) {
+  const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: range }));
+  return {
+    body: Readable.toWeb(res.Body as Readable) as ReadableStream,
+    contentLength: res.ContentLength,
+    contentRange: res.ContentRange,
+    contentType: res.ContentType ?? "audio/mp4",
+    partial: Boolean(res.ContentRange),
+  };
 }

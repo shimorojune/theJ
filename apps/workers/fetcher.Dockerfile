@@ -10,6 +10,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/workers/package.json apps/workers/
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
+COPY packages/core/package.json packages/core/
 RUN pnpm install --frozen-lockfile --prod --filter @thej/workers...
 COPY packages packages
 COPY apps/workers apps/workers
