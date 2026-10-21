@@ -1,12 +1,13 @@
-FROM oven/bun:1.4 AS base
+FROM node:24-slim
+RUN corepack enable
 WORKDIR /repo
-COPY package.json bun.lock ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/api/package.json apps/api/
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
-RUN bun install --frozen-lockfile --production --filter @thej/api
+RUN pnpm install --frozen-lockfile --prod --filter @thej/api...
 COPY packages packages
 COPY apps/api apps/api
 WORKDIR /repo/apps/api
 EXPOSE 3000
-CMD ["bun", "src/index.ts"]
+CMD ["node", "--import", "tsx", "src/index.ts"]

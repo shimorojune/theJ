@@ -2,7 +2,6 @@
 
 A party DJ app: an Expo Android player with 4 vibe buttons and a text box, backed by a TypeScript
 service that fetches songs with yt-dlp, analyses them once, and plans the queue.
-
 - Architecture: https://claude.ai/artifact/K27oLAioiXiv8jqpH9zVCv
 - Design canvas: https://claude.ai/artifact/7tEmKnkjEaBdgfeuuENAn3
 
@@ -12,7 +11,7 @@ service that fetches songs with yt-dlp, analyses them once, and plans the queue.
 apps/
   mobile/    Expo 58 Android app (Expo Router, Clerk, react-native-track-player)
   web/       PWA, mobile view only (Vite, React, Clerk, <audio> + Media Session)
-  api/       Hono on Bun: Clerk JWT auth, sessions, SSE, signed audio URLs
+  api/       Hono on Node: Clerk JWT auth, sessions, SSE, signed audio URLs
   workers/   BullMQ workers, one entrypoint each: fetcher, analysis, planner
 packages/
   shared/    zod schemas, queue names, DJ engine math (used by app, api, workers)
@@ -22,29 +21,29 @@ infra/       local dev compose, Dokploy stack, home proxy (see infra/README.md)
 
 ## Getting started
 
-Needs Bun 1.4+ and Docker (or OrbStack) for local Postgres, Redis and MinIO.
+Needs Node 24+, pnpm 9+ and Docker (or OrbStack) for local Postgres, Redis and MinIO.
 
 ```sh
-bun install
+pnpm install
 cp .env.example .env
-bun run infra:up
-bun run db:generate && bun run db:migrate
-bun run dev:api          # http://localhost:3000/health
-bun run dev:fetcher      # needs yt-dlp + ffmpeg locally, or run it on Dokploy
+pnpm infra:up
+pnpm db:generate && pnpm db:migrate
+pnpm dev:api             # http://localhost:3000/health
+pnpm dev:fetcher         # needs yt-dlp + ffmpeg locally, or run it on Dokploy
 ```
 
 Web PWA (open on your phone over the LAN, then "Add to Home screen"):
 
 ```sh
-bun run dev:web                  # vite --host, proxies /api to localhost:3000
+pnpm dev:web                     # vite --host, proxies /api to localhost:3000
 ```
 
 Mobile (needs a dev build, not Expo Go, because of track-player):
 
 ```sh
 cd apps/mobile && cp .env.example .env
-bunx expo run:android            # dev build on a connected device / emulator
-bun run build:apk                # eas build --local, sideloadable APK
+npx expo run:android             # dev build on a connected device / emulator
+pnpm build:apk                   # eas build --local, sideloadable APK
 ```
 
 ## Build order

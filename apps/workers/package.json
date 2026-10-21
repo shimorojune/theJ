@@ -4,17 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:fetcher": "bun --watch --env-file=../../.env src/fetcher/index.ts",
-    "dev:analysis": "bun --watch --env-file=../../.env src/analysis/index.ts",
-    "dev:planner": "bun --watch --env-file=../../.env src/planner/index.ts",
+    "dev:fetcher": "tsx watch --env-file-if-exists=../../.env src/fetcher/index.ts",
+    "dev:analysis": "tsx watch --env-file-if-exists=../../.env src/analysis/index.ts",
+    "dev:planner": "tsx watch --env-file-if-exists=../../.env src/planner/index.ts",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1154.0",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "@thej/db": "workspace:*",
     "@thej/shared": "workspace:*",
     "ai": "^7.0.148",
     "bullmq": "^6.4.0",
+    "tsx": "^4.23.15",
     "youtubei.js": "^18.2.0",
     "zod": "^4.6.7"
   }

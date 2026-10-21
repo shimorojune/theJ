@@ -1,4 +1,4 @@
-# Local dev services. `bun run infra:up` from the repo root.
+# Local dev services. `pnpm infra:up` from the repo root.
 services:
   postgres:
     image: postgres:17-alpine

@@ -12,5 +12,7 @@ const worker = new Worker<AnalyseJob>(
   { connection, concurrency: 2 },
 );
 
-worker.on("failed", (job, err) => console.error(`analyse failed ${job?.data.videoId}: ${err.message}`));
+worker.on("failed", (job, err) =>
+  console.error(`analyse failed ${job?.data.videoId}: ${err.message}`),
+);
 console.log("analysis worker up");

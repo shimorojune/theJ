@@ -17,7 +17,7 @@ services:
       # set this to "true" and delete the devices/cap_add lines.
       TS_USERSPACE: "false"
     volumes:
-      - ts-state:/var/lib/tailscale   # named volume: Umbrel wipes bind mounts
+      - ts-state:/var/lib/tailscale # named volume: Umbrel wipes bind mounts
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:

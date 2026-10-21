@@ -12,5 +12,7 @@ const worker = new Worker<PlanJob>(
   { connection, concurrency: 4 },
 );
 
-worker.on("failed", (job, err) => console.error(`plan failed ${job?.data.sessionId}: ${err.message}`));
+worker.on("failed", (job, err) =>
+  console.error(`plan failed ${job?.data.sessionId}: ${err.message}`),
+);
 console.log("planner worker up");

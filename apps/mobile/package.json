@@ -6,7 +6,7 @@
   "scripts": {
     "start": "expo start --dev-client",
     "android": "expo run:android",
-    "build:apk": "eas build --local --platform android --profile preview",
+    "build:apk": "npx eas-cli build --local --platform android --profile preview",
     "typecheck": "tsc -p ."
   },
   "dependencies": {

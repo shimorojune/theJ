@@ -2,26 +2,28 @@
   "name": "thej",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.3",
-  "workspaces": ["apps/*", "packages/*"],
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "dev:api": "bun --filter @thej/api dev",
-    "dev:fetcher": "bun --filter @thej/workers dev:fetcher",
-    "dev:analysis": "bun --filter @thej/workers dev:analysis",
-    "dev:planner": "bun --filter @thej/workers dev:planner",
-    "dev:mobile": "bun --filter @thej/mobile start",
-    "dev:web": "bun --filter @thej/web dev",
+    "dev:api": "pnpm --filter @thej/api dev",
+    "dev:fetcher": "pnpm --filter @thej/workers dev:fetcher",
+    "dev:analysis": "pnpm --filter @thej/workers dev:analysis",
+    "dev:planner": "pnpm --filter @thej/workers dev:planner",
+    "dev:mobile": "pnpm --filter @thej/mobile start",
+    "dev:web": "pnpm --filter @thej/web dev",
     "infra:up": "docker compose -f infra/dev.compose.yml up -d",
     "infra:down": "docker compose -f infra/dev.compose.yml down",
-    "db:generate": "bun --filter @thej/db generate",
-    "db:migrate": "bun --filter @thej/db migrate",
-    "typecheck": "bun --filter '*' typecheck",
+    "db:generate": "pnpm --filter @thej/db generate",
+    "db:migrate": "pnpm --filter @thej/db migrate",
+    "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
     "format": "biome check --write ."
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",
-    "@types/bun": "^1.4.3",
+    "@types/node": "^24.19.2",
     "typescript": "^7.0.2"
   }
 }

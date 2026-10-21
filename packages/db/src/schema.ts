@@ -11,7 +11,13 @@ import {
   timestamp,
 } from "drizzle-orm/pg-core";
 
-export const trackStatus = pgEnum("track_status", ["new", "fetching", "fetched", "ready", "failed"]);
+export const trackStatus = pgEnum("track_status", [
+  "new",
+  "fetching",
+  "fetched",
+  "ready",
+  "failed",
+]);
 export const queueState = pgEnum("queue_state", ["planned", "committed", "played", "skipped"]);
 export const playEventKind = pgEnum("play_event_kind", ["start", "skip", "like", "complete"]);
 
@@ -49,7 +55,10 @@ export const tracks = pgTable(
     lastPlayedAt: timestamp("last_played_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("tracks_status_idx").on(t.status), index("tracks_last_played_idx").on(t.lastPlayedAt)],
+  (t) => [
+    index("tracks_status_idx").on(t.status),
+    index("tracks_last_played_idx").on(t.lastPlayedAt),
+  ],
 );
 
 export const sessions = pgTable("sessions", {

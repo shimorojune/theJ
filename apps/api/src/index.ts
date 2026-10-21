@@ -1,4 +1,5 @@
+import { serve } from "@hono/node-server";
 import { app } from "./app";
 import { env } from "./env";
 
-export default { port: env.PORT, fetch: app.fetch };
+serve({ fetch: app.fetch, port: env.PORT }, (info) => console.log(`api on :${info.port}`));

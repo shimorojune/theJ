@@ -7,7 +7,9 @@ export function setupPlayer() {
     await TrackPlayer.setupPlayer();
     await TrackPlayer.updateOptions({
       capabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext],
-      android: { appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification },
+      android: {
+        appKilledPlaybackBehavior: AppKilledPlaybackBehavior.StopPlaybackAndRemoveNotification,
+      },
     });
   })();
   return ready;

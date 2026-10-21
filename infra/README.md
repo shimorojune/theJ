@@ -1,12 +1,12 @@
 # infra
 
-| File | Where it runs | Status |
-|---|---|---|
-| `dev.compose.yml` | your Mac | Postgres, Redis, MinIO for local dev |
-| `dokploy/thej.compose.yml` | Dokploy VPS | target production stack |
-| `dokploy/fetcher-probe.compose.yml` | Dokploy VPS | **live**: the probe that proved 10/10 downloads via home |
-| `home/home-proxy.live.compose.yml` | Umbrel Portainer | **live**: stack `deejay-home-proxy` |
-| `home/home-proxy.compose.yml` | Umbrel Portainer | hardened version (own Tailscale node, no LAN port) |
+| File                                | Where it runs    | Status                                                   |
+| ----------------------------------- | ---------------- | -------------------------------------------------------- |
+| `dev.compose.yml`                   | your Mac         | Postgres, Redis, MinIO for local dev                     |
+| `dokploy/thej.compose.yml`          | Dokploy VPS      | target production stack                                  |
+| `dokploy/fetcher-probe.compose.yml` | Dokploy VPS      | **live**: the probe that proved 10/10 downloads via home |
+| `home/home-proxy.live.compose.yml`  | Umbrel Portainer | **live**: stack `deejay-home-proxy`                      |
+| `home/home-proxy.compose.yml`       | Umbrel Portainer | hardened version (own Tailscale node, no LAN port)       |
 
 No secret values live here. They come from Dokploy / Portainer environment variables.
 
