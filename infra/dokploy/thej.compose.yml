@@ -1,19 +1,26 @@
-# theJ production stack on Dokploy (target layout; build from repo once it's on GitHub).
-# All secrets come from Dokploy > Compose > Environment. See .env.example for the full list.
+# theJ production stack on Dokploy (Compose "fetcher" in project "deejay", built from this repo).
+# Secrets come from Dokploy > Compose > Environment:
+#   required: POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD, AUDIO_URL_SIGNING_SECRET,
+#             TS_AUTHKEY, HOME_PROXY_IP, PROXY_PASS
+#   later:    CLERK_SECRET_KEY, LASTFM_API_KEY, OPENROUTER_API_KEY, LLM_*_MODEL, FALLBACK_PROXY
 # api is the only service with a public domain (via Dokploy Traefik on dokploy-network).
+# The compose keeps the probe's project name, so the Tailscale node identity (ts-state) carries over.
 services:
   api:
     build: { context: ../.., dockerfile: apps/api/Dockerfile }
     environment: &app-env
-      DATABASE_URL: postgres://thej:${POSTGRES_PASSWORD}@postgres:5432/thej
+      DATABASE_URL: postgres://thej:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/thej
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://minio:9000
       S3_BUCKET: audio
-      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY}
-      AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET}
-    depends_on: [postgres, redis, minio]
+      S3_ACCESS_KEY_ID: thej
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET:?set AUDIO_URL_SIGNING_SECRET}
+    depends_on: &after-migrate
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+      minio: { condition: service_started }
     networks: [default, dokploy-network]
     restart: unless-stopped
 
@@ -22,19 +29,26 @@ services:
     command: ["node", "--import", "tsx", "src/planner/index.ts"]
     environment:
       <<: *app-env
-      LASTFM_API_KEY: ${LASTFM_API_KEY}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
-      LLM_INTERPRET_MODEL: ${LLM_INTERPRET_MODEL}
-      LLM_REFILL_MODEL: ${LLM_REFILL_MODEL}
-    depends_on: [postgres, redis]
+      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      LLM_INTERPRET_MODEL: ${LLM_INTERPRET_MODEL:-}
+      LLM_REFILL_MODEL: ${LLM_REFILL_MODEL:-}
+    depends_on: *after-migrate
     restart: unless-stopped
 
   analysis:
     build: { context: ../.., dockerfile: apps/workers/Dockerfile }
     command: ["node", "--import", "tsx", "src/analysis/index.ts"]
     environment: *app-env
-    depends_on: [postgres, redis, minio]
+    depends_on: *after-migrate
     restart: unless-stopped
+
+  migrate:
+    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
+    command: ["node", "--import", "tsx", "../../packages/db/src/migrate.ts"]
+    environment: *app-env
+    depends_on: [postgres]
+    restart: on-failure:5
 
   # Fetcher, bgutil and tailscale share one network namespace. Tailscale also joins the
   # default network so the fetcher can reach redis and minio by name.
@@ -42,7 +56,7 @@ services:
     image: tailscale/tailscale:v1.104.2
     hostname: deejay-fetcher
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_HOSTNAME: deejay-fetcher
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "false"
@@ -64,17 +78,20 @@ services:
     network_mode: service:tailscale
     environment:
       <<: *app-env
-      HOME_PROXY: socks5h://deejay:${PROXY_PASS}@${HOME_PROXY_IP}:1080
+      HOME_PROXY: socks5h://deejay:${PROXY_PASS:?set PROXY_PASS}@${HOME_PROXY_IP:?set HOME_PROXY_IP}:1080
       FALLBACK_PROXY: ${FALLBACK_PROXY:-}
       FETCH_CONCURRENCY: "1"
-    depends_on: [tailscale, bgutil, redis, minio]
+    depends_on:
+      <<: *after-migrate
+      tailscale: { condition: service_started }
+      bgutil: { condition: service_started }
     restart: unless-stopped
 
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_USER: thej
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
       POSTGRES_DB: thej
     volumes: [pg-data:/var/lib/postgresql/data]
     restart: unless-stopped
@@ -89,8 +106,8 @@ services:
     image: cgr.dev/chainguard/minio:latest
     command: ["server", "/data"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: thej
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
     volumes: [minio-data:/data]
     restart: unless-stopped
 
