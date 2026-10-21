@@ -1,0 +1,38 @@
+# theJ home proxy (intended/hardened version): runs on the Umbrel box as a Portainer stack.
+# Only job: give the Dokploy fetcher a residential exit IP. No yt-dlp, no state, no open ports.
+# Node and tag names keep the original "deejay" prefix because they are live on the tailnet.
+#
+# Portainer > Stacks > Add stack > paste this > set env vars:
+#   TS_AUTHKEY  Tailscale auth key, created with tag:deejay-proxy (not ephemeral)
+#   PROXY_PASS  long random string, letters and digits only (it goes inside a URL)
+services:
+  tailscale:
+    image: tailscale/tailscale:v1.104.2
+    hostname: deejay-home-proxy
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_HOSTNAME: deejay-home-proxy
+      TS_STATE_DIR: /var/lib/tailscale
+      # Kernel mode. If Portainer can't give the container /dev/net/tun,
+      # set this to "true" and delete the devices/cap_add lines.
+      TS_USERSPACE: "false"
+    volumes:
+      - ts-state:/var/lib/tailscale   # named volume: Umbrel wipes bind mounts
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    restart: unless-stopped
+
+  proxy:
+    image: gogost/gost:3.3.1
+    # Shares the Tailscale container's network, so :1080 is reachable over the tailnet only.
+    network_mode: service:tailscale
+    command: ["-L", "socks5://deejay:${PROXY_PASS}@:1080"]
+    depends_on:
+      - tailscale
+    restart: unless-stopped
+
+volumes:
+  ts-state:

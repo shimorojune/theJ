@@ -1,0 +1,54 @@
+# theJ
+
+A party DJ app: an Expo Android player with 4 vibe buttons and a text box, backed by a TypeScript
+service that fetches songs with yt-dlp, analyses them once, and plans the queue.
+
+- Architecture: https://claude.ai/artifact/K27oLAioiXiv8jqpH9zVCv
+- Design canvas: https://claude.ai/artifact/7tEmKnkjEaBdgfeuuENAn3
+
+## Layout
+
+```
+apps/
+  mobile/    Expo 58 Android app (Expo Router, Clerk, react-native-track-player)
+  api/       Hono on Bun: Clerk JWT auth, sessions, SSE, signed audio URLs
+  workers/   BullMQ workers, one entrypoint each: fetcher, analysis, planner
+packages/
+  shared/    zod schemas, queue names, DJ engine math (used by app, api, workers)
+  db/        Drizzle schema + client for Postgres
+infra/       local dev compose, Dokploy stack, home proxy (see infra/README.md)
+```
+
+## Getting started
+
+Needs Bun 1.4+ and Docker (or OrbStack) for local Postgres, Redis and MinIO.
+
+```sh
+bun install
+cp .env.example .env
+bun run infra:up
+bun run db:generate && bun run db:migrate
+bun run dev:api          # http://localhost:3000/health
+bun run dev:fetcher      # needs yt-dlp + ffmpeg locally, or run it on Dokploy
+```
+
+Mobile (needs a dev build, not Expo Go, because of track-player):
+
+```sh
+cd apps/mobile && cp .env.example .env
+bunx expo run:android            # dev build on a connected device / emulator
+bun run build:apk                # eas build --local, sideloadable APK
+```
+
+## Build order
+
+1. Fetch pipeline: fetcher via home proxy → MinIO → ReccoBeats, 50 Hindi + English songs
+2. Engine + api: scorer, ramp, sessions, Clerk auth, SSE
+3. Expo player: RNTP, background playback, lock screen, signed URLs
+4. LLM layer: interpret / refill via OpenRouter, bucket cache, daily cap
+5. Hardening: proxy fallback, Essentia fallback, eviction job, metrics
+
+## Secrets
+
+Never commit secrets. Real values live in Dokploy / Portainer env. The Android release keystore stays
+out of the repo and must be backed up: losing it means every phone has to reinstall.

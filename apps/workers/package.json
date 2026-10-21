@@ -1,0 +1,21 @@
+{
+  "name": "@thej/workers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:fetcher": "bun --watch --env-file=../../.env src/fetcher/index.ts",
+    "dev:analysis": "bun --watch --env-file=../../.env src/analysis/index.ts",
+    "dev:planner": "bun --watch --env-file=../../.env src/planner/index.ts",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "@thej/db": "workspace:*",
+    "@thej/shared": "workspace:*",
+    "ai": "^7.0.148",
+    "bullmq": "^6.4.0",
+    "youtubei.js": "^18.2.0",
+    "zod": "^4.6.7"
+  }
+}

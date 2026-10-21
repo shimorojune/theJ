@@ -1,0 +1,19 @@
+{
+  "expo": {
+    "name": "theJ",
+    "slug": "thej",
+    "scheme": "thej",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["android"],
+    "android": {
+      "package": "app.thej",
+      "permissions": ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK", "WAKE_LOCK"]
+    },
+    "plugins": ["expo-router", "expo-secure-store", "@clerk/expo"],
+    "experiments": { "typedRoutes": true },
+    "updates": { "enabled": false },
+    "runtimeVersion": { "policy": "appVersion" }
+  }
+}

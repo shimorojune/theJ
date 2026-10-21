@@ -1,0 +1,11 @@
+# What is actually deployed today as the Portainer stack "deejay-home-proxy" (2026-10-21).
+# Simplified: reuses Umbrel's own Tailscale node (100.104.87.114) instead of its own container,
+# so :1080 is also reachable on the home LAN (192.168.0.110:1080), still password-protected.
+# Make sure the router does NOT forward 1080. Migrate to home-proxy.compose.yml when convenient.
+services:
+  proxy:
+    image: gogost/gost:3.3.1
+    command: ["-L", "socks5://deejay:${PROXY_PASS}@:1080"]
+    ports:
+      - "1080:1080"
+    restart: unless-stopped

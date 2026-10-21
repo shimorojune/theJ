@@ -1,0 +1,23 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# env and secrets: never commit
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+credentials.json
+google-services.json
+
+# expo
+.expo/
+apps/mobile/android/
+apps/mobile/ios/
+*.apk
+*.aab
+
+# local data
+.data/
