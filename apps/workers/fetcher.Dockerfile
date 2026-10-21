@@ -1,7 +1,7 @@
 # fetcher: yt-dlp nightly + Deno (JS challenges) + bgutil PO-token plugin + ffmpeg.
 # Rebuild nightly so yt-dlp stays current; most YouTube breakages are fixed upstream in a day or two.
 FROM node:24-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates curl \
   && rm -rf /var/lib/apt/lists/* && corepack enable
 ARG CACHEBUST
 RUN pip install --break-system-packages -q -U --pre "yt-dlp[default]" deno "bgutil-ytdlp-pot-provider==2.0.2"

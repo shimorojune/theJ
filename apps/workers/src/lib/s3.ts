@@ -1,7 +1,10 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import type { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import {
   CreateBucketCommand,
+  GetObjectCommand,
   HeadBucketCommand,
   PutObjectCommand,
   S3Client,
@@ -43,4 +46,9 @@ export async function uploadAudio(key: string, path: string): Promise<number> {
     }),
   );
   return size;
+}
+
+export async function downloadObject(key: string, path: string): Promise<void> {
+  const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  await pipeline(res.Body as Readable, createWriteStream(path));
 }

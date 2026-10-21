@@ -1,6 +1,8 @@
 name: thej
 # Local dev services. `pnpm infra:up` from the repo root.
 # The audio bucket is created by the workers on startup (ensureBucket).
+# `pnpm workers:up` also builds and runs the fetcher (+ bgutil) and analysis workers in Docker,
+# so yt-dlp and ffmpeg don't need installing on the Mac. HOME_PROXY comes from the root .env.
 services:
   postgres:
     image: postgres:17-alpine
@@ -20,6 +22,33 @@ services:
     environment: { MINIO_ROOT_USER: thej, MINIO_ROOT_PASSWORD: thej-dev-secret }
     ports: ["9000:9000", "9001:9001"]
     volumes: [minio-data:/data]
+
+  bgutil:
+    profiles: [workers]
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    init: true
+
+  fetcher:
+    profiles: [workers]
+    build: { context: .., dockerfile: apps/workers/fetcher.Dockerfile }
+    environment: &worker-env
+      DATABASE_URL: postgres://thej:thej@postgres:5432/thej
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET: audio
+      S3_ACCESS_KEY_ID: thej
+      S3_SECRET_ACCESS_KEY: thej-dev-secret
+      HOME_PROXY: ${HOME_PROXY:-}
+      FALLBACK_PROXY: ${FALLBACK_PROXY:-}
+      BGUTIL_URL: http://bgutil:4416
+    depends_on: [postgres, redis, minio, bgutil]
+
+  analysis:
+    profiles: [workers]
+    build: { context: .., dockerfile: apps/workers/Dockerfile }
+    command: ["node", "--import", "tsx", "src/analysis/index.ts"]
+    environment: *worker-env
+    depends_on: [postgres, redis, minio]
 
 volumes:
   pg-data:

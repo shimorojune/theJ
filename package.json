@@ -13,12 +13,18 @@
     "dev:planner": "pnpm --filter @thej/workers dev:planner",
     "dev:mobile": "pnpm --filter @thej/mobile start",
     "infra:up": "docker compose -f infra/dev.compose.yml up -d",
-    "infra:down": "docker compose -f infra/dev.compose.yml down",
+    "infra:down": "docker compose -f infra/dev.compose.yml --profile workers down",
     "db:generate": "pnpm --filter @thej/db generate",
     "db:migrate": "pnpm --filter @thej/db migrate",
     "typecheck": "pnpm -r typecheck",
     "lint": "biome check .",
-    "format": "biome check --write ."
+    "format": "biome check --write .",
+    "workers:up": "docker compose -f infra/dev.compose.yml --env-file .env --profile workers up -d --build",
+    "workers:logs": "docker compose -f infra/dev.compose.yml --profile workers logs -f fetcher analysis",
+    "seed": "pnpm --filter @thej/workers seed",
+    "status": "pnpm --filter @thej/workers status",
+    "proxy:forward": "node infra/scripts/tailnet-forward.mjs",
+    "requeue": "pnpm --filter @thej/workers requeue"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",

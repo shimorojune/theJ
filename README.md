@@ -31,6 +31,19 @@ pnpm dev:api             # http://localhost:3000/health
 pnpm dev:fetcher         # needs yt-dlp + ffmpeg locally, or run it on Dokploy
 ```
 
+Fetch pipeline (fetcher + bgutil + analysis run in Docker, so no yt-dlp/ffmpeg on the Mac):
+
+```sh
+pnpm workers:up                  # build + start the workers (profile "workers")
+pnpm seed                        # resolve 50 Hindi + English songs, queue fetches
+pnpm status                      # tracks per status + features of ready songs
+pnpm requeue                     # retry failed jobs
+pnpm workers:logs
+```
+
+Downloads go direct unless `HOME_PROXY` is set. That's fine when the Mac is on the home network
+(same exit IP as the proxy). Elsewhere, run `pnpm proxy:forward` and set `HOME_PROXY` as in `.env.example`.
+
 Mobile (needs a dev build, not Expo Go, because of track-player):
 
 ```sh
