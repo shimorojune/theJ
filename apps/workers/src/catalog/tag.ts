@@ -8,7 +8,13 @@ import { sleep } from "./normalize";
  * LLM pass for what the sources don't give: language, era, mood words, a first energy/valence guess.
  * 25 songs per call on a free OpenRouter model; JSON out, validated, bad rows skipped.
  */
-const MODEL = process.env.LLM_TAG_MODEL ?? "minimax/minimax-m3.1-flash:free";
+const MODELS = (
+  process.env.LLM_TAG_MODEL ??
+  "minimax/minimax-m3.1-flash:free,nvidia/nemotron-3-super-120b-a12b:free,google/gemma-4-26b-a4b-it:free"
+).split(",");
+let modelIdx = 0;
+/** Reasoning models spend their budget thinking; keep batches small and leave room for the answer. */
+const BATCH = 15;
 
 const Tag = z.object({
   i: z.number().int(),
@@ -50,20 +56,27 @@ ${list}`;
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: MODEL,
+      model: MODELS[modelIdx % MODELS.length],
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 4000,
+      max_tokens: 8000,
       temperature: 0.2,
+      reasoning: { effort: "low" },
     }),
     signal: AbortSignal.timeout(120_000),
   });
   const body = (await res.json()) as {
     error?: { message: string };
-    choices?: { message: { content: string } }[];
+    choices?: { message: { content: string | null }; finish_reason?: string }[];
   };
-  if (body.error || !body.choices?.[0])
+  if (body.error || !body.choices?.[0]) {
+    modelIdx++;
     throw new Error(`openrouter: ${body.error?.message ?? "no choices"}`);
+  }
   const text = body.choices[0].message.content;
+  if (!text) {
+    modelIdx++;
+    throw new Error(`openrouter: empty content (${body.choices[0].finish_reason ?? "?"})`);
+  }
   const json = text.slice(text.indexOf("["), text.lastIndexOf("]") + 1);
   const parsed = Tags.safeParse(JSON.parse(json));
   if (!parsed.success) throw new Error(`tag parse: ${parsed.error.issues[0]?.message}`);
@@ -106,7 +119,7 @@ export async function tagUntagged(max = Infinity, log = console.log): Promise<nu
       })
       .from(songs)
       .where(isNull(songs.taggedAt))
-      .limit(25);
+      .limit(BATCH);
     if (!rows.length) break;
     try {
       const n = await tagBatch(rows);
