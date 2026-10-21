@@ -15,8 +15,8 @@ export function applyButton(goal: Vibe, button: Button): Vibe {
   return { energy: clamp(goal.energy + d.energy), valence: clamp(goal.valence + d.valence) };
 }
 
-/** Each played song moves the target one step toward the goal, so changes ramp gradually. */
-export function stepToward(target: Vibe, goal: Vibe, step = 0.08): Vibe {
+/** Each played song moves the target toward the goal: a button tap lands within 1–2 songs. */
+export function stepToward(target: Vibe, goal: Vibe, step = 0.3): Vibe {
   const move = (from: number, to: number) =>
     Math.abs(to - from) <= step + 1e-9 ? to : from + Math.sign(to - from) * step;
   return { energy: move(target.energy, goal.energy), valence: move(target.valence, goal.valence) };
@@ -48,9 +48,11 @@ export type ScoreContext = {
   inSession: Set<string>;
   /** The user skipped these recently: leave them out. */
   skipped: Set<string>;
-  /** The user heard these in the last day: allowed, but pushed down. */
+  /** The user heard these recently: excluded while anything else fits, else pushed down. */
   heardRecently: Set<string>;
   liked: Set<string>;
+  /** Set by rank() when excluding recent songs would leave nothing to play. */
+  allowRecent?: boolean;
   fewerLyrics?: boolean;
   /** Small randomness so two parties with the same vibe don't get identical queues. */
   jitter?: () => number;
@@ -62,7 +64,7 @@ export function scoreCandidate(c: Candidate, ctx: ScoreContext): number {
   if (!c.languages.some((l) => ctx.languages.includes(l))) return Infinity;
 
   let s = vibeDistance(c, ctx.target);
-  if (ctx.heardRecently.has(c.videoId)) s += 0.15;
+  if (ctx.heardRecently.has(c.videoId)) s += ctx.allowRecent ? 0.3 : Infinity;
   if (ctx.liked.has(c.videoId)) s -= 0.08;
 
   // Keep the language mix near what the user asked for: nudge down a language that's over-played.
@@ -75,14 +77,17 @@ export function scoreCandidate(c: Candidate, ctx: ScoreContext): number {
   return s + (ctx.jitter?.() ?? Math.random() * 0.04);
 }
 
-/** Best `n` eligible candidates, best first. */
+/** Best `n` eligible candidates, best first. Recently heard songs only when nothing else is left. */
 export function rank(cands: Candidate[], ctx: ScoreContext, n: number): Candidate[] {
-  return cands
-    .map((c) => ({ c, s: scoreCandidate(c, ctx) }))
-    .filter((x) => Number.isFinite(x.s))
-    .sort((a, b) => a.s - b.s)
-    .slice(0, n)
-    .map((x) => x.c);
+  const pick = (allowRecent: boolean) =>
+    cands
+      .map((c) => ({ c, s: scoreCandidate(c, { ...ctx, allowRecent }) }))
+      .filter((x) => Number.isFinite(x.s))
+      .sort((a, b) => a.s - b.s)
+      .slice(0, n)
+      .map((x) => x.c);
+  const fresh = pick(false);
+  return fresh.length >= n ? fresh : pick(true);
 }
 
 /** Even split across the session's languages unless the user set a ratio for a pair. */

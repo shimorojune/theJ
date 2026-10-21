@@ -48,7 +48,7 @@ export default function Settings() {
           }}
         />
         <PrimaryButton
-          label={saved ? "Saved. Applies to your next party" : "Save"}
+          label={saved ? "Saved. Applies to your next mood" : "Save"}
           onPress={() =>
             void save({ languages: toLanguages(choice), mixRatio: hiShare }).then(() =>
               setSaved(true),
@@ -57,7 +57,7 @@ export default function Settings() {
         />
         {queue ? (
           <GhostButton
-            label="End this party"
+            label="Stop the music"
             onPress={() => void end().then(() => router.replace("/home"))}
           />
         ) : null}

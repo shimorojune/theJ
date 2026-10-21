@@ -8,6 +8,13 @@
       "when": 1792605237732,
       "tag": "0000_colossal_christian_walker",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1792615645724,
+      "tag": "0001_bumpy_sir_ram",
+      "breakpoints": true
     }
   ]
 }

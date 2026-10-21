@@ -30,11 +30,7 @@ export default function StartVibe() {
         {error ? (
           <Text style={{ color: "#F0A868", fontSize: 13, textAlign: "center" }}>{error}</Text>
         ) : null}
-        <PrimaryButton
-          label="Start the party"
-          onPress={() => void go().catch(() => {})}
-          busy={starting}
-        />
+        <PrimaryButton label="Start" onPress={() => void go().catch(() => {})} busy={starting} />
         <Text style={{ color: "#6E6E75", fontSize: 12, textAlign: "center" }}>
           The first song starts right away.
         </Text>

@@ -51,7 +51,7 @@ export default function Home() {
               <Image source={now.thumbUrl} style={st.liveArt} contentFit="cover" />
               <View style={{ flex: 1, gap: 3 }}>
                 <Text style={st.liveTitle}>
-                  {user?.firstName ? `${user.firstName}'s party` : "Your party"}
+                  {user?.firstName ? `${user.firstName}'s mood` : "Your mood"}
                 </Text>
                 <Text style={st.liveSub} numberOfLines={1}>
                   {now.title}
@@ -67,7 +67,7 @@ export default function Home() {
       ) : null}
 
       <View style={st.sectionRow}>
-        <Text style={st.section}>Start a new party</Text>
+        <Text style={st.section}>Set a mood</Text>
         <Pressable
           onPress={() => router.push({ pathname: "/onboarding/vibe", params: { standalone: "1" } })}
         >

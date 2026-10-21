@@ -16,6 +16,7 @@ export type Song = {
 export type Queue = {
   sessionId: string;
   committed: Song[];
+  liked: string[];
   goal: Vibe;
   target: Vibe;
   skipTo?: string;

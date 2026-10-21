@@ -10,7 +10,7 @@ import { c } from "../src/theme";
 const queryClient = new QueryClient();
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? "";
 
-/** The party (and its audio) only exists for a signed-in user. */
+/** The mood session (and its audio) only exists for a signed-in user. */
 function WhenSignedIn({ children }: { children: ReactNode }) {
   const { isSignedIn } = useAuth();
   return isSignedIn ? <PartyProvider>{children}</PartyProvider> : children;

@@ -89,7 +89,8 @@ export const sessions = new Hono<AuthVars>()
     if (event === "skip" || event === "complete") {
       return c.json(await changed(await advance(db, id, videoId, event)));
     }
-    return c.body(null, 204);
+    // like / unlike: answer with the queue so the app can show the new state.
+    return c.json(toQueueEvent(await getQueue(db, id)));
   })
   .post("/:id/end", async (c) => {
     const id = c.req.param("id");

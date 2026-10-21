@@ -24,7 +24,7 @@ export function usePrefs() {
     async (prefs: Prefs) => {
       await ok(await api.me.$put({ json: prefs }));
       if (user && !user.unsafeMetadata?.onboarded) {
-        await user.update({ unsafeMetadata: { ...user.unsafeMetadata, onboarded: true } });
+        await user.updateMetadata({ unsafeMetadata: { onboarded: true } });
       }
     },
     [api, user],

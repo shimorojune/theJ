@@ -1,12 +1,13 @@
+import { createHash } from "node:crypto";
 import { sessions, tracks, users } from "@thej/db";
 import { type PlanJob, PRIORITY, QUEUES } from "@thej/shared";
 import { Worker } from "bullmq";
-import { and, arrayOverlaps, count, eq, lt } from "drizzle-orm";
+import { and, arrayOverlaps, eq, lt } from "drizzle-orm";
 import { db } from "../lib/db";
 import { enqueueFetch } from "../lib/queues";
 import { connection } from "../lib/redis";
 import { resolveSong } from "../lib/resolve";
-import { seedStarter } from "../lib/starter";
+import { STARTER, seedStarter } from "../lib/starter";
 
 /**
  * Refill: a session is running low on ready songs. For now, fetch known-but-unfetched tracks in
@@ -45,10 +46,11 @@ worker.on("failed", (job, err) =>
 );
 console.log("planner worker up");
 
-// A fresh install has nothing to play: put the starter shelf in the fetch queue once.
-const [{ n }] = (await db.select({ n: count() }).from(tracks)) as [{ n: number }];
-if (n < 20) {
-  console.log(`only ${n} tracks known; seeding the starter shelf`);
+// Seed the starter shelf once per version of the list: resolving is idempotent (tracks keyed by
+// video id, fetch jobs keyed by video id), so a rerun only adds what's new.
+const STARTER_VERSION = `starter:seeded:${createHash("sha1").update(JSON.stringify(STARTER)).digest("hex").slice(0, 12)}`;
+if (!(await connection.get(STARTER_VERSION))) {
+  console.log(`seeding the starter shelf (${STARTER.length} songs)`);
   const queued = await seedStarter({
     resolve: resolveSong,
     insert: async (t) => {
@@ -56,5 +58,6 @@ if (n < 20) {
     },
     enqueue: (id) => enqueueFetch(id, PRIORITY.prefetch),
   });
-  console.log(`starter shelf: ${queued} songs queued for fetching`);
+  await connection.set(STARTER_VERSION, String(queued));
+  console.log(`starter shelf: ${queued} songs resolved and queued`);
 }

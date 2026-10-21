@@ -1,7 +1,7 @@
+import Slider from "@react-native-community/slider";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { fmtTime } from "../src/lib/types";
@@ -11,9 +11,21 @@ import { IconButton } from "../src/ui/kit";
 import { VibeCard } from "../src/ui/VibeCard";
 
 export default function Player() {
-  const { queue, status, togglePlay, skip, restart, like, press, error } = useParty();
+  const {
+    queue,
+    status,
+    togglePlay,
+    skip,
+    jumpNext,
+    restart,
+    seek,
+    repeat,
+    toggleRepeat,
+    toggleLike,
+    press,
+    error,
+  } = useParty();
   const { now, next } = useNowPlaying();
-  const [liked, setLiked] = useState<string | null>(null);
 
   if (!queue || !now) {
     return (
@@ -22,7 +34,7 @@ export default function Player() {
       >
         <ActivityIndicator color={c.fg} />
         <Text style={st.sub}>
-          {queue ? "Waiting for the first songs to be ready…" : "No party running"}
+          {queue ? "Waiting for the first songs to be ready…" : "No mood playing"}
         </Text>
         {error ? <Text style={[st.sub, { color: "#F0A868" }]}>{error}</Text> : null}
         {!queue ? (
@@ -31,7 +43,6 @@ export default function Player() {
       </View>
     );
   }
-  const progress = status.duration ? status.currentTime / status.duration : 0;
 
   return (
     <LinearGradient
@@ -45,7 +56,7 @@ export default function Player() {
             <IconButton name="chevron-down" label="Minimise player" onPress={() => router.back()} />
             <View style={{ alignItems: "center", gap: 2 }}>
               <Text style={st.djing}>DJING FOR</Text>
-              <Text style={st.party}>Your party</Text>
+              <Text style={st.party}>Your mood</Text>
             </View>
             <IconButton
               name="ellipsis-horizontal"
@@ -79,20 +90,25 @@ export default function Player() {
               </View>
             ) : null}
             <IconButton
-              name={liked === now.videoId ? "heart" : "heart-outline"}
-              label={liked === now.videoId ? "Liked" : "Like"}
+              name={queue.liked.includes(now.videoId) ? "heart" : "heart-outline"}
+              label={queue.liked.includes(now.videoId) ? "Unlike" : "Like"}
               color={c.accent}
-              onPress={() => {
-                setLiked(now.videoId);
-                void like();
-              }}
+              onPress={() => void toggleLike()}
             />
           </View>
 
           <View style={{ gap: 6, marginTop: 12 }}>
-            <View style={st.track}>
-              <View style={[st.trackFill, { width: `${progress * 100}%` }]} />
-            </View>
+            <Slider
+              accessibilityLabel="Seek"
+              style={st.slider}
+              minimumValue={0}
+              maximumValue={status.duration || now.durationS || 1}
+              value={status.currentTime}
+              onSlidingComplete={seek}
+              minimumTrackTintColor={c.fg}
+              maximumTrackTintColor="rgba(255,255,255,0.18)"
+              thumbTintColor={c.fg}
+            />
             <View style={st.times}>
               <Text style={st.time}>{fmtTime(status.currentTime)}</Text>
               <Text style={st.time}>{fmtTime(status.duration || now.durationS)}</Text>
@@ -126,14 +142,19 @@ export default function Player() {
             </Pressable>
             <IconButton name="play-skip-forward" label="Skip song" size={26} onPress={skip} />
             <IconButton
-              name="chatbubble-outline"
-              label="Ask the DJ (coming soon)"
-              color="#5A5A60"
+              name={repeat ? "repeat" : "repeat-outline"}
+              label={repeat ? "Repeat on" : "Repeat this song"}
+              color={repeat ? c.accent : c.fg2}
+              onPress={toggleRepeat}
             />
           </View>
 
           {next ? (
-            <Pressable onPress={() => router.push("/queue")} style={st.next}>
+            <Pressable
+              accessibilityLabel={`Play ${next.title} now`}
+              onPress={jumpNext}
+              style={st.next}
+            >
               <Image source={next.thumbUrl} style={st.nextArt} contentFit="cover" />
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={st.upNext}>UP NEXT</Text>
@@ -181,8 +202,7 @@ const st = StyleSheet.create({
     justifyContent: "center",
   },
   pillText: { color: c.fg, fontSize: 12, fontWeight: "500" },
-  track: { height: 3, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.18)" },
-  trackFill: { height: 3, borderRadius: 2, backgroundColor: c.fg },
+  slider: { height: 28, marginHorizontal: -8 },
   times: { flexDirection: "row", justifyContent: "space-between" },
   time: { color: c.dim, fontSize: 12 },
   controls: {

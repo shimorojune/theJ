@@ -28,6 +28,7 @@ export function toQueueEvent(q: QueueState): QueueEvent & {
   return {
     sessionId: q.sessionId,
     committed: q.committed.map(toQueueTrack),
+    liked: q.liked,
     goal: q.goal,
     target: q.target,
     ...(q.skipTo ? { skipTo: q.skipTo } : {}),

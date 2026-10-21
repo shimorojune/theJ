@@ -25,7 +25,7 @@ export const ControlRequest = z.discriminatedUnion("kind", [
 ]);
 export type ControlRequest = z.infer<typeof ControlRequest>;
 
-export const PlayEventKind = z.enum(["start", "skip", "like", "complete"]);
+export const PlayEventKind = z.enum(["start", "skip", "like", "unlike", "complete"]);
 export const PlayEvent = z.object({
   sessionId: z.string(),
   videoId: VideoId,
@@ -47,5 +47,7 @@ export type QueueTrack = z.infer<typeof QueueTrack>;
 export const QueueEvent = z.object({
   sessionId: z.string(),
   committed: z.array(QueueTrack).max(3),
+  /** Which of the committed songs the user has liked. */
+  liked: z.array(VideoId),
 });
 export type QueueEvent = z.infer<typeof QueueEvent>;

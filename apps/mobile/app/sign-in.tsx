@@ -31,6 +31,7 @@ const TILES = [
   "#3E7A6A",
   "#A84A40",
 ];
+const TILE_LIST = TILES.map((bg, i) => ({ id: `tile-${i}`, bg }));
 
 export default function SignIn() {
   const { startSSOFlow } = useSSO();
@@ -67,12 +68,11 @@ export default function SignIn() {
 
   return (
     <Screen style={{ paddingHorizontal: 28 }}>
-      <View pointerEvents="none" style={st.tiles}>
-        {TILES.map((bg, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: static decorative grid
+      <View pointerEvents="none" style={[st.tiles, { height: tile * 5 + 40 }]}>
+        {TILE_LIST.map((t) => (
           <View
-            key={`${bg}${i}`}
-            style={[st.tile, { width: tile, height: tile, backgroundColor: bg }]}
+            key={t.id}
+            style={[st.tile, { width: tile, height: tile, backgroundColor: t.bg }]}
           />
         ))}
       </View>

@@ -46,7 +46,7 @@ test("target ramps toward the goal one step per song", () => {
     target = stepToward(target, goal);
     steps.push(Math.round(target.energy * 100) / 100);
   }
-  assert.deepEqual(steps, [0.58, 0.66, 0.74, 0.82, 0.9]);
+  assert.deepEqual(steps, [0.8, 0.9]);
 });
 
 test("closest to target wins", () => {

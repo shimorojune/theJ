@@ -84,8 +84,7 @@ if (cmd === "start") {
     param: { id },
     json: { videoId: now.videoId, event },
   });
-  if (res.status === 204) console.log(`liked ${now.title}`);
-  else show(await json<Q>(res));
+  show(await json<Q>(res));
 } else if (cmd === "play") {
   const id = await sessionId();
   for (let i = 0; i < Number(args[0] ?? 5); i++) {

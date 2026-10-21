@@ -2,6 +2,7 @@ import { useAuth } from "@clerk/expo";
 import type { Button, Vibe } from "@thej/shared";
 import {
   type AudioPlaylistStatus,
+  requestNotificationPermissionsAsync,
   setAudioModeAsync,
   useAudioPlaylist,
   useAudioPlaylistStatus,
@@ -16,6 +17,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { Platform } from "react-native";
 import EventSource from "react-native-sse";
 import { API_URL, ok, useApi } from "../lib/api";
 import type { Queue, Song } from "../lib/types";
@@ -30,9 +32,14 @@ type Party = {
   start: (languages: ("en" | "hi")[], vibe: Vibe) => Promise<void>;
   press: (button: Button, now: boolean) => Promise<void>;
   skip: () => void;
+  /** Jump to the next song because the user chose it (not a dislike). */
+  jumpNext: () => void;
   togglePlay: () => void;
   restart: () => void;
-  like: () => Promise<void>;
+  seek: (seconds: number) => void;
+  repeat: boolean;
+  toggleRepeat: () => void;
+  toggleLike: () => Promise<void>;
   end: () => Promise<void>;
   upcoming: () => Promise<Song[]>;
   nowPlaying: { now: Song | undefined; next: Song | undefined };
@@ -57,6 +64,8 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<Queue | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repeat, setRepeat] = useState(false);
+  const lockScreenActive = useRef(false);
 
   /** Video ids in the native playlist, index for index. */
   const loaded = useRef<string[]>([]);
@@ -72,16 +81,24 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       shouldPlayInBackground: true,
       interruptionMode: "doNotMix",
     });
+    // Android 13+ hides the media notification until the app asks for it.
+    if (Platform.OS === "android") void requestNotificationPermissionsAsync().catch(() => {});
   }, []);
 
+  /** First call creates the media session; later ones only swap the metadata, so it doesn't flicker. */
   const lockScreen = useCallback(
     (song: Song | undefined) => {
       if (!song) return;
       const meta = { title: song.title, artist: song.artist, artworkUrl: song.thumbUrl };
+      if (lockScreenActive.current) {
+        playlist.updateLockScreenMetadata(meta);
+        return;
+      }
       playlist.setActiveForLockScreen(true, meta, {
         showNextTrack: true,
         showPreviousTrack: false,
       });
+      lockScreenActive.current = true;
     },
     [playlist],
   );
@@ -133,7 +150,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   );
 
   const send = useCallback(
-    async (videoId: string, event: "start" | "skip" | "complete" | "like") => {
+    async (videoId: string, event: "start" | "skip" | "complete" | "like" | "unlike") => {
       if (!sessionId) return;
       const res = await api.sessions[":id"].events.$post({
         param: { id: sessionId },
@@ -259,6 +276,21 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     playlist.next();
   }, [playlist]);
 
+  const jumpNext = useCallback(() => {
+    if (playlist.currentIndex >= loaded.current.length - 1) return;
+    reason.current = "complete";
+    playlist.next();
+  }, [playlist]);
+
+  const seek = useCallback((seconds: number) => void playlist.seekTo(seconds), [playlist]);
+
+  const toggleRepeat = useCallback(() => {
+    setRepeat((r) => {
+      playlist.loop = r ? "none" : "single";
+      return !r;
+    });
+  }, [playlist]);
+
   const togglePlay = useCallback(() => {
     if (playlist.playing) playlist.pause();
     else playlist.play();
@@ -266,10 +298,11 @@ export function PartyProvider({ children }: { children: ReactNode }) {
 
   const restart = useCallback(() => void playlist.seekTo(0), [playlist]);
 
-  const like = useCallback(async () => {
+  const toggleLike = useCallback(async () => {
     const id = loaded.current[playlist.currentIndex];
-    if (id) await send(id, "like");
-  }, [playlist, send]);
+    if (!id) return;
+    await send(id, queue?.liked.includes(id) ? "unlike" : "like");
+  }, [playlist, send, queue?.liked]);
 
   const end = useCallback(async () => {
     if (sessionId)
@@ -278,6 +311,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     playlist.pause();
     playlist.clear();
     playlist.clearLockScreenControls();
+    lockScreenActive.current = false;
     loaded.current = [];
     setQueue(null);
   }, [api, sessionId, playlist]);
@@ -303,9 +337,13 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         start,
         press,
         skip,
+        jumpNext,
         togglePlay,
         restart,
-        like,
+        seek,
+        repeat,
+        toggleRepeat,
+        toggleLike,
         end,
         upcoming,
         nowPlaying,

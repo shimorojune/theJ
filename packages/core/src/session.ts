@@ -30,6 +30,8 @@ export type QueueState = {
   committed: Track[];
   /** Few songs left to choose from: the caller should enqueue a refill. */
   lowPool: boolean;
+  /** Committed songs the user has liked. */
+  liked: string[];
   /** Set by a long press: the app should jump straight to this song. */
   skipTo?: string;
 };
@@ -137,7 +139,7 @@ export async function recordEvent(
   userId: string,
   sessionId: string,
   videoId: string,
-  event: "start" | "skip" | "like" | "complete",
+  event: "start" | "skip" | "like" | "unlike" | "complete",
 ) {
   await db.insert(playEvents).values({ userId, sessionId, videoId, event });
   if (event === "start") {
@@ -237,12 +239,14 @@ async function state(tx: Tx, s: Session): Promise<QueueState> {
   const byId = new Map(rows.map((r) => [r.videoId, r]));
   const { ctx, pool } = await context(tx, s);
   const eligible = rank(pool.cands, ctx, LOW_POOL).length;
+  const committed = items.map((i) => byId.get(i.videoId)).filter((t): t is Track => Boolean(t));
   return {
     sessionId: s.id,
     goal: s.goal as Vibe,
     target: s.target as Vibe,
-    committed: items.map((i) => byId.get(i.videoId)).filter((t): t is Track => Boolean(t)),
+    committed,
     lowPool: eligible < LOW_POOL,
+    liked: committed.map((t) => t.videoId).filter((id) => ctx.liked.has(id)),
   };
 }
 
@@ -251,7 +255,7 @@ async function context(tx: Tx, s: Session) {
   const [user] = await tx.select().from(users).where(eq(users.id, s.userId));
   const languages = filters.languages ?? user?.languages ?? ["en", "hi"];
   const dayAgo = new Date(Date.now() - 24 * 3600_000);
-  const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000);
+  const monthAgo = new Date(Date.now() - 30 * 24 * 3600_000);
 
   const [rows, sessionItems, events] = await Promise.all([
     tx
@@ -272,8 +276,17 @@ async function context(tx: Tx, s: Session) {
     tx
       .select({ videoId: playEvents.videoId, event: playEvents.event, at: playEvents.at })
       .from(playEvents)
-      .where(and(eq(playEvents.userId, s.userId), gte(playEvents.at, weekAgo))),
+      .where(and(eq(playEvents.userId, s.userId), gte(playEvents.at, monthAgo)))
+      .orderBy(asc(playEvents.at)),
   ]);
+
+  // A like stands until an unlike after it.
+  const liked = new Set<string>();
+  for (const e of events) {
+    if (e.event === "like") liked.add(e.videoId);
+    if (e.event === "unlike") liked.delete(e.videoId);
+  }
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000);
 
   const byId = new Map(rows.map((r) => [r.videoId, r]));
   // Committed songs count too, so the next pick balances against what's already lined up.
@@ -291,11 +304,13 @@ async function context(tx: Tx, s: Session) {
     mix: languageMix(languages, user?.mixRatio),
     playedShare,
     inSession: new Set(sessionItems.map((i) => i.videoId)),
-    skipped: new Set(events.filter((e) => e.event === "skip").map((e) => e.videoId)),
+    skipped: new Set(
+      events.filter((e) => e.event === "skip" && e.at >= weekAgo).map((e) => e.videoId),
+    ),
     heardRecently: new Set(
       events.filter((e) => e.event === "start" && e.at >= dayAgo).map((e) => e.videoId),
     ),
-    liked: new Set(events.filter((e) => e.event === "like").map((e) => e.videoId)),
+    liked,
     fewerLyrics: filters.fewerLyrics,
   };
   const cands: Candidate[] = rows.map((r) => ({

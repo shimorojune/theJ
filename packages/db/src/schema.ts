@@ -19,7 +19,13 @@ export const trackStatus = pgEnum("track_status", [
   "failed",
 ]);
 export const queueState = pgEnum("queue_state", ["planned", "committed", "played", "skipped"]);
-export const playEventKind = pgEnum("play_event_kind", ["start", "skip", "like", "complete"]);
+export const playEventKind = pgEnum("play_event_kind", [
+  "start",
+  "skip",
+  "like",
+  "unlike",
+  "complete",
+]);
 
 /** Keyed by Clerk user id. */
 export const users = pgTable("users", {
