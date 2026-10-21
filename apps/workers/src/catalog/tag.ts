@@ -1,5 +1,5 @@
 import { songs } from "@thej/db";
-import { eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../lib/db";
 import { sleep } from "./normalize";
@@ -15,6 +15,12 @@ const MODELS = (
 let modelIdx = 0;
 /** Reasoning models spend their budget thinking; keep batches small and leave room for the answer. */
 const BATCH = 15;
+
+/** TAG_SHARD="k/N" lets N tagger processes split the untagged rows without stepping on each other. */
+function shardFilter() {
+  const [k, n] = (process.env.TAG_SHARD ?? "0/1").split("/").map(Number);
+  return n && n > 1 ? sql`abs(hashtext(${songs.id})) % ${n} = ${k}` : sql`true`;
+}
 
 const Tag = z.object({
   i: z.number().int(),
@@ -118,7 +124,7 @@ export async function tagUntagged(max = Infinity, log = console.log): Promise<nu
         labels: songs.labels,
       })
       .from(songs)
-      .where(isNull(songs.taggedAt))
+      .where(and(isNull(songs.taggedAt), shardFilter()))
       .limit(BATCH);
     if (!rows.length) break;
     try {
