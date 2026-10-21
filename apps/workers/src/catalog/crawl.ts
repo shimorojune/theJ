@@ -1,12 +1,13 @@
 /**
  * Catalog crawl (architecture v3, build step 1). Metadata only, never audio.
- * Usage: pnpm crawl [deezer|ytmusic|tag|all] [--max-playlists N]
+ * Usage: pnpm crawl [deezer|ytmusic|tag|embed|all] [--max-playlists N]
  */
 import { songs } from "@thej/db";
 import { sql } from "drizzle-orm";
 import { db } from "../lib/db";
 import { connection } from "../lib/redis";
 import { playlistTracks, searchPlaylists } from "./deezer";
+import { embedPending } from "./embed";
 import { sleep } from "./normalize";
 import { playlistCrawledRecently, storePlaylist } from "./store";
 import { tagUntagged } from "./tag";
@@ -129,6 +130,7 @@ async function report() {
 if (what === "deezer" || what === "all") await crawlDeezer();
 if (what === "ytmusic" || what === "all") await crawlYtMusic();
 if (what === "tag" || what === "all") log(`tagged ${await tagUntagged(Infinity, log)} songs`);
+if (what === "embed" || what === "all") log(`embedded ${await embedPending(log)} songs`);
 await report();
 await connection.quit();
 process.exit(0);

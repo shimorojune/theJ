@@ -27,7 +27,8 @@
     "requeue": "pnpm --filter @thej/workers requeue",
     "cli": "pnpm --silent --filter @thej/api cli",
     "test": "pnpm -r --if-present test",
-    "crawl": "pnpm --filter @thej/workers crawl"
+    "crawl": "pnpm --filter @thej/workers crawl",
+    "sets": "pnpm --filter @thej/workers sets"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",

@@ -1,5 +1,6 @@
 import {
   bigint,
+  customType,
   index,
   integer,
   jsonb,
@@ -11,6 +12,13 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+
+/** pgvector column; 384 dims = all-MiniLM-L6-v2. */
+export const vector384 = customType<{ data: number[]; driverData: string }>({
+  dataType: () => "vector(384)",
+  toDriver: (v) => `[${v.join(",")}]`,
+  fromDriver: (v) => JSON.parse(v) as number[],
+});
 
 export const trackStatus = pgEnum("track_status", [
   "new",
@@ -146,6 +154,9 @@ export const songs = pgTable(
     /** How many playlists this song appeared in; a cheap popularity signal. */
     sourceCount: integer("source_count").notNull().default(1),
     taggedAt: timestamp("tagged_at", { withTimezone: true }),
+    /** Text embedding of "title by artist · labels · era"; the mood space lives here. */
+    embedding: vector384("embedding"),
+    embeddedAt: timestamp("embedded_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
