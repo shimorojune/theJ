@@ -5,7 +5,7 @@ name: thej
 # so yt-dlp and ffmpeg don't need installing on the Mac. HOME_PROXY comes from the root .env.
 services:
   postgres:
-    image: postgres:17-alpine
+    image: pgvector/pgvector:pg17
     environment: { POSTGRES_USER: thej, POSTGRES_PASSWORD: thej, POSTGRES_DB: thej }
     ports: ["5432:5432"]
     volumes: [pg-data:/var/lib/postgresql/data]

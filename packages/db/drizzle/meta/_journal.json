@@ -15,6 +15,13 @@
       "when": 1792615645724,
       "tag": "0001_bumpy_sir_ram",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792619366729,
+      "tag": "0002_whole_captain_britain",
+      "breakpoints": true
     }
   ]
 }

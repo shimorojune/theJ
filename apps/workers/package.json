@@ -10,7 +10,8 @@
     "typecheck": "tsc -p .",
     "seed": "tsx --env-file-if-exists=../../.env src/scripts/seed.ts",
     "status": "tsx --env-file-if-exists=../../.env src/scripts/status.ts",
-    "requeue": "tsx --env-file-if-exists=../../.env src/scripts/requeue.ts"
+    "requeue": "tsx --env-file-if-exists=../../.env src/scripts/requeue.ts",
+    "crawl": "tsx --env-file-if-exists=../../.env src/catalog/crawl.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1154.0",

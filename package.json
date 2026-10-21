@@ -26,7 +26,8 @@
     "proxy:forward": "node infra/scripts/tailnet-forward.mjs",
     "requeue": "pnpm --filter @thej/workers requeue",
     "cli": "pnpm --silent --filter @thej/api cli",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "crawl": "pnpm --filter @thej/workers crawl"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",
