@@ -1,4 +1,4 @@
-import { signAudioUrl } from "@thej/core";
+import { signAudioUrl, songLanguages } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
@@ -21,6 +21,23 @@ export const lab = new Hono<AuthVars>()
       ) top order by random() limit ${n}`);
     for (const r of rows) await queues.enqueueStream(r.id, 9);
     return c.json({ queued: rows.length });
+  })
+  // Picker diagnostics: how the catalogue's languages look to the picker (read-only, fixed queries).
+  .get("/stats", async (c) => {
+    const q = async (query: ReturnType<typeof sql>) => db.execute(query);
+    const [pgvector, effective, tagged, guessOfTagged, sample] = await Promise.all([
+      q(sql`select extversion from pg_extension where extname = 'vector'`),
+      q(sql`select ${songLanguages} as langs, count(*)::int n from songs s
+            where s.embedding is not null and not s.junk group by 1 order by 2 desc limit 12`),
+      q(sql`select languages, count(*)::int n from songs where languages <> '{}'
+            group by 1 order by 2 desc limit 10`),
+      // How often the guess agrees with the tagger, per tagged language.
+      q(sql`select languages[1] as tag, lang_guess[1] as guess, count(*)::int n from songs
+            where languages <> '{}' group by 1, 2 order by 3 desc limit 20`),
+      q(sql`select title, artist, labels, lang_guess from songs
+            where languages @> '{hi}' and lang_guess @> '{en}' order by random() limit 15`),
+    ]);
+    return c.json({ pgvector, effective, tagged, guessOfTagged, sample });
   })
   .get("/songs", async (c) => {
     const limit = Math.min(500, Number(c.req.query("limit") ?? 200) || 200);
@@ -48,6 +65,8 @@ export const lab = new Hono<AuthVars>()
         mixOutS: cache.mixOutS,
         mixInBeatS: cache.mixInBeatS,
         mixOutBeatS: cache.mixOutBeatS,
+        stemsInS: cache.stemsInS,
+        stemsOutS: cache.stemsOutS,
         previewOffsetS: cache.previewOffsetS,
         previewMatch: cache.previewMatch,
         audioUrl: signAudioUrl(env.PUBLIC_API_URL, song.id, env.AUDIO_URL_SIGNING_SECRET),
