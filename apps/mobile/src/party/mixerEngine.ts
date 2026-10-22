@@ -47,6 +47,8 @@ type Deck = {
   /** After a mix, `rate` eases linearly to 1 over `dur` seconds starting at context time `at`. */
   ramp?: { at: number; dur: number };
   started: boolean;
+  /** Key of this deck's current source in `MixerEngine.endedDecks`. */
+  endedId?: number;
 };
 
 /**
@@ -75,6 +77,14 @@ export class MixerEngine implements Engine {
   private statusCbs = new Set<(s: EngineStatus) => void>();
   private trackCbs = new Set<(c: TrackChange) => void>();
   private subs: { remove(): void }[] = [];
+  /**
+   * Decks by their source's "ended" listener. react-native-audio-api never drops an ended
+   * listener (setting onEnded again or to null leaves the old one subscribed), so a listener
+   * that closed over its deck kept every song ever played in memory: about 180 MB each, and the
+   * app died of OOM after a few songs. Listeners hold only an id; a retired deck's is removed.
+   */
+  private endedDecks = new Map<number, Deck>();
+  private endedSeq = 0;
 
   constructor() {
     this.master = this.ctx.createGain();
@@ -97,6 +107,10 @@ export class MixerEngine implements Engine {
 
   setQueue(list: Song[]) {
     this.queue = list;
+    // Decoded audio of songs that left the queue goes (a playing deck keeps its own reference).
+    const queued = new Set(list.map((s) => s.songId));
+    for (const key of this.decoding.keys())
+      if (!queued.has(key.slice(key.indexOf(":") + 1))) this.decoding.delete(key);
     const cur = this.current;
     const i = cur ? list.findIndex((s) => s.songId === cur.song.songId) : -1;
     if (!cur || i < 0) {
@@ -219,8 +233,13 @@ export class MixerEngine implements Engine {
     deck.rate = rate;
     deck.ramp = undefined;
     deck.started = true;
+    if (deck.endedId) this.endedDecks.delete(deck.endedId);
+    const id = ++this.endedSeq;
+    deck.endedId = id;
+    this.endedDecks.set(id, deck);
     deck.source.onEnded = () => {
-      if (this.current === deck && !this.repeat) this.onCurrentEnded(deck);
+      const d = this.endedDecks.get(id);
+      if (d && this.current === d && !this.repeat) this.onCurrentEnded(d);
     };
   }
 
@@ -229,7 +248,9 @@ export class MixerEngine implements Engine {
     setTimeout(
       () => {
         if (this.current === deck || this.nextDeck === deck) return;
-        for (const n of [deck.source, deck.filter, deck.gain]) {
+        if (deck.endedId) this.endedDecks.delete(deck.endedId);
+        releaseSource(deck.source);
+        for (const n of [deck.filter, deck.gain]) {
           try {
             n.disconnect();
           } catch {}
@@ -528,9 +549,11 @@ export class MixerEngine implements Engine {
     const fresh = this.ctx.createBufferSource({ pitchCorrection: true });
     fresh.buffer = cur.buffer;
     fresh.connect(cur.gain);
+    const old = cur.source;
     try {
-      cur.source.stop();
+      old.stop();
     } catch {}
+    setTimeout(() => releaseSource(old), 250);
     cur.source = fresh;
     cur.started = false;
     this.startDeck(cur, this.ctx.currentTime + 0.02, Math.max(0, seconds), 1);
@@ -612,3 +635,19 @@ export class MixerEngine implements Engine {
 }
 
 export const PRELOAD = PRELOAD_AHEAD_S;
+
+/**
+ * Let a stopped source's audio go now: with pitch correction each source holds its own full copy
+ * of the song (another ~90 MB), freed natively once its buffer is unset.
+ */
+function releaseSource(source: AudioBufferSourceNode) {
+  try {
+    source.onEnded = null;
+  } catch {}
+  try {
+    source.buffer = null;
+  } catch {}
+  try {
+    source.disconnect();
+  } catch {}
+}
