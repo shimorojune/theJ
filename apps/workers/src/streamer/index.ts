@@ -4,7 +4,7 @@ import { previewUrlFor } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { QUEUES, STREAM_READY_CHANNEL, type StreamJob, type StreamReady } from "@thej/shared";
 import { Worker } from "bullmq";
-import { eq, lt, sql } from "drizzle-orm";
+import { eq, isNull, lt, sql } from "drizzle-orm";
 import { Egress } from "../fetcher/egress";
 import { downloadAudio } from "../fetcher/ytdlp";
 import { db } from "../lib/db";
@@ -94,6 +94,8 @@ const worker = new Worker<StreamJob>(
           scale: a.scale,
           mixInS: a.mixInS,
           mixOutS: a.mixOutS,
+          mixInBeatS: a.mixInBeatS,
+          mixOutBeatS: a.mixOutBeatS,
           previewOffsetS: pv?.offsetS ?? null,
           previewMatch: pv?.match ?? null,
         })
@@ -157,5 +159,28 @@ async function isPinned(songId: string) {
   return Boolean(r?.p);
 }
 setInterval(() => void sweep().catch((e) => console.error("sweep", e)), 5 * 60_000).unref();
+
+/** Songs pulled before mix points carried a fitted beat grid: analyse them again, one at a time. */
+async function reanalyse() {
+  const rows = await db
+    .select({ songId: audioCache.songId, path: audioCache.path })
+    .from(audioCache)
+    .where(isNull(audioCache.mixOutBeatS));
+  for (const row of rows) {
+    const a = await analyse(row.path).catch(() => null);
+    if (!a) continue;
+    await db
+      .update(audioCache)
+      .set({
+        mixInS: a.mixInS,
+        mixOutS: a.mixOutS,
+        mixInBeatS: a.mixInBeatS,
+        mixOutBeatS: a.mixOutBeatS,
+      })
+      .where(eq(audioCache.songId, row.songId));
+  }
+  if (rows.length) console.log(`reanalysed ${rows.length} songs`);
+}
+void reanalyse().catch((e) => console.error("reanalyse", e));
 
 console.log(`streamer up (dir ${DIR}, egress ${egress.label}, keep ${KEEP_MIN} min)`);

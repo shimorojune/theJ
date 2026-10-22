@@ -12,6 +12,9 @@ export type Song = {
   bpm?: number | null;
   mixInS?: number | null;
   mixOutS?: number | null;
+  /** Beat length (s) at each mix point, fitted to the audio; absent on older analyses. */
+  mixInBeatS?: number | null;
+  mixOutBeatS?: number | null;
   /** 30-second store preview to start on while the full audio is pulled. */
   previewUrl?: string | null;
   /** Where that preview sits inside the full audio, once the full song is pulled. */

@@ -46,6 +46,8 @@ export const lab = new Hono<AuthVars>()
         scale: cache.scale,
         mixInS: cache.mixInS,
         mixOutS: cache.mixOutS,
+        mixInBeatS: cache.mixInBeatS,
+        mixOutBeatS: cache.mixOutBeatS,
         previewOffsetS: cache.previewOffsetS,
         previewMatch: cache.previewMatch,
         audioUrl: signAudioUrl(env.PUBLIC_API_URL, song.id, env.AUDIO_URL_SIGNING_SECRET),

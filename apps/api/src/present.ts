@@ -16,7 +16,15 @@ export function toSong(
   s: Song,
 ): Omit<
   QueueTrack,
-  "ready" | "mixInS" | "mixOutS" | "bpm" | "audioUrl" | "previewUrl" | "previewOffsetS"
+  | "ready"
+  | "mixInS"
+  | "mixOutS"
+  | "mixInBeatS"
+  | "mixOutBeatS"
+  | "bpm"
+  | "audioUrl"
+  | "previewUrl"
+  | "previewOffsetS"
 > & { bpm: number | null } {
   return {
     songId: s.id,
@@ -39,6 +47,8 @@ export function toQueueTrack(q: QueuedSong): QueueTrack {
     bpm: q.bpm === null ? null : Math.round(q.bpm * 100) / 100,
     mixInS: q.mixInS,
     mixOutS: q.mixOutS,
+    mixInBeatS: q.mixInBeatS,
+    mixOutBeatS: q.mixOutBeatS,
     previewUrl: q.hasPreview
       ? signAudioUrl(env.PUBLIC_API_URL, q.id, env.AUDIO_URL_SIGNING_SECRET, 6 * 3600, "preview")
       : null,

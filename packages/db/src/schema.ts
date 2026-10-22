@@ -228,6 +228,12 @@ export const audioCache = pgTable(
     mixInS: real("mix_in_s"),
     mixOutS: real("mix_out_s"),
     /**
+     * Beat length (s) of a grid fitted to the song's onsets over the mix window at each point.
+     * Song-wide bpm drifts too far over a 24-beat mix; these hold. Null on older rows.
+     */
+    mixInBeatS: real("mix_in_beat_s"),
+    mixOutBeatS: real("mix_out_beat_s"),
+    /**
      * Where the 30-second store preview sits inside this audio, so the phone can start on the
      * preview and swap to the full song at the same moment. Null when the match was weak.
      */

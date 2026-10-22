@@ -49,6 +49,9 @@ export const QueueTrack = z.object({
   /** Mix points in seconds, from the analyser; null until ready. */
   mixInS: z.number().nullable(),
   mixOutS: z.number().nullable(),
+  /** Beat length (s) at each mix point, fitted to the audio; null on older analyses. */
+  mixInBeatS: z.number().nullable(),
+  mixOutBeatS: z.number().nullable(),
   /** Signed 30-second preview the phone can start on at once; null when there is none. */
   previewUrl: z.string().url().nullable(),
   /** Where the preview sits inside the full audio; known once the full song is pulled. */

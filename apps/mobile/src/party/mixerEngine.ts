@@ -382,10 +382,20 @@ export class MixerEngine implements Engine {
     return now + (t - this.positionAt(deck, now)) / this.rateAt(deck, now);
   }
 
-  /** One beat of `deck` in context seconds. */
+  /**
+   * Beat length of `song` in its own time at a mix point: the grid the server fitted to the
+   * audio there when it has one (song-wide bpm drifts 100 ms or more over a mix), else the bpm.
+   */
+  private songBeat(song: Song, at: "in" | "out"): number | null {
+    const fitted = at === "in" ? song.mixInBeatS : song.mixOutBeatS;
+    return fitted || (song.bpm ? 60 / song.bpm : null);
+  }
+
+  /** One beat of `deck` (at its mix-out) in context seconds. */
   private beatSeconds(deck: Deck | null, fallback: Song): number {
-    const bpm = deck?.song.bpm || fallback.bpm || 100;
-    return 60 / bpm / (deck ? this.rateAt(deck, this.ctx.currentTime) : 1);
+    const own = deck ? this.songBeat(deck.song, "out") : null;
+    const beat = own ?? this.songBeat(fallback, "in") ?? 0.6;
+    return own && deck ? beat / this.rateAt(deck, this.ctx.currentTime) : beat;
   }
 
   /**
@@ -434,8 +444,11 @@ export class MixerEngine implements Engine {
     const from = cur?.song.songId ?? null;
     let rate = 1;
     // Tempo matching needs both beat grids: previews have none.
-    if (cur?.kind === "full" && deck.kind === "full" && cur.song.bpm && deck.song.bpm) {
-      const r = (cur.song.bpm * this.rateAt(cur, when)) / deck.song.bpm;
+    const curBeat = cur ? this.songBeat(cur.song, "out") : null;
+    const inBeat = this.songBeat(deck.song, "in");
+    if (cur?.kind === "full" && deck.kind === "full" && curBeat && inBeat) {
+      // Fast enough that one beat of `deck` lasts as long as one beat of `cur` as it plays now.
+      const r = (inBeat * this.rateAt(cur, when)) / curBeat;
       const candidates = [r, r / 2, r * 2];
       const best = candidates.reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p), r);
       if (Math.abs(best - 1) <= MAX_TEMPO_STRETCH) rate = best;

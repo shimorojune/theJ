@@ -155,6 +155,24 @@ def onset_env(x):
     return np.maximum(flux, 0)
 
 
+def grid_phase_ms(env, grid_s, beat_s):
+    """Shift (ms, within a quarter beat) that puts the most onset energy on the grid times.
+
+    A quarter beat, not half: intros full of off-beat hats would otherwise lock half a beat out
+    and read as a 250 ms miss while the grid is right (later bars of the same song confirm it).
+    """
+    span = max(1, int(beat_s / 4 * 100))
+    idx = np.round(np.asarray(grid_s) * 100).astype(int)
+    best, best_v = 0, -1.0
+    for sh in range(-span, span + 1):
+        i = idx + sh
+        i = i[(i >= 0) & (i < len(env))]
+        v = float(env[i].mean()) if len(i) else 0.0
+        if v > best_v:
+            best, best_v = sh, v
+    return best * 10
+
+
 def lag_ms(ea, eb, beat_s):
     """Best lag (ms) of eb against ea within half a beat, and the match strength."""
     span = max(1, int(beat_s / 2 * 100))
@@ -174,30 +192,90 @@ def lag_ms(ea, eb, beat_s):
 # --- the mix -----------------------------------------------------------------------------
 
 
-def tempo_rate(a, b):
-    r = a["bpm"] / b["bpm"]
+# GRID = "global": the song-wide bpm from its first mix beat (the phone today).
+# GRID = "local": a straight line fitted through the analysed beats of the mix window.
+# GRID = "fitted": a grid fitted to the song's own onsets over the mix window.
+GRID = "fitted"
+WINDOW_BEATS = MIX_IN_BEATS + MIX_OUT_BEATS
+
+
+_ENV = {}
+
+
+def song_env(song):
+    if song["songId"] not in _ENV:
+        _ENV[song["songId"]] = onset_env(load(song))
+    return _ENV[song["songId"]]
+
+
+def fitted_grid(song, t0):
+    """Beat grid fitted to the song's own onsets over the mix window: the period (within 2% of
+    the analysed bpm) and the phase (within 60 ms of t0) that put the most onset energy on the
+    beats, like nudging a grid by hand in DJ software. Phase refined to 1 ms."""
+    env = song_env(song)
+    base = 60 / song["bpm"]
+    k = np.arange(WINDOW_BEATS)
+    t = np.arange(len(env)) / 100
+
+    def energy(anchor, period):
+        return float(np.interp(anchor + k * period, t, env).mean())
+
+    best = (energy(t0, base), t0, base)
+    for period in base * (1 + np.linspace(-0.02, 0.02, 81)):
+        for anchor in t0 + np.arange(-0.06, 0.0605, 0.005):
+            e = energy(anchor, period)
+            if e > best[0]:
+                best = (e, anchor, period)
+    _, anchor, period = best
+    for anchor2 in anchor + np.arange(-0.005, 0.0051, 0.001):
+        e = energy(anchor2, period)
+        if e > best[0]:
+            best = (e, anchor2, period)
+    return float(best[1]), float(best[2])
+
+
+def local_grid(song, t0):
+    """(anchor, period): the beat at t0 and the beat length over the next WINDOW_BEATS beats."""
+    if GRID == "global":
+        return t0, 60 / song["bpm"]
+    if GRID == "fitted":
+        return fitted_grid(song, t0)
+    beats = np.array(song["beats"])
+    i = int(np.argmin(abs(beats - t0)))
+    w = beats[i : i + WINDOW_BEATS + 1]
+    if len(w) < 8:
+        return t0, 60 / song["bpm"]
+    k = np.arange(len(w))
+    period, anchor = np.polyfit(k, w, 1)
+    return float(anchor), float(period)
+
+
+def tempo_rate(pa, pb):
+    """How much faster B must play so its beat length equals A's (half/double time allowed)."""
+    r = pb / pa
     best = min((r, r / 2, r * 2), key=lambda c: abs(c - 1))
     return best if abs(best - 1) <= MAX_STRETCH else 1.0
 
 
 def plan(a, b):
-    rate = tempo_rate(a, b)
-    beat = 60 / a["bpm"]
-    in_s = min(14, MIX_IN_BEATS * beat)
-    out_s = min(8, MIX_OUT_BEATS * beat)
-    return {"rate": rate, "beat": beat, "in": in_s, "out": out_s}
+    a0, pa = local_grid(a, a["mixOutS"])
+    b0, pb = local_grid(b, b["mixInS"])
+    rate = tempo_rate(pa, pb)
+    in_s = min(14, MIX_IN_BEATS * pa)
+    out_s = min(8, MIX_OUT_BEATS * pa)
+    return {"rate": rate, "beat": pa, "in": in_s, "out": out_s, "a0": a0, "b0": b0}
 
 
 def render(a, b, pre=16.0, post=24.0):
     """Both decks as heard around the mix, plus the summed mix. Times are relative to B's start."""
     p = plan(a, b)
     xa, xb = load(a), load(b)
-    a0 = int((a["mixOutS"] - pre) * SR)
-    a_part = xa[:, max(0, a0) : int((a["mixOutS"] + p["in"] + p["out"] + 0.5) * SR)]
+    a0 = int((p["a0"] - pre) * SR)
+    a_part = xa[:, max(0, a0) : int((p["a0"] + p["in"] + p["out"] + 0.5) * SR)]
     if a0 < 0:
         a_part = np.pad(a_part, ((0, 0), (-a0, 0)))
     total = p["in"] + p["out"] + post
-    b_src = xb[:, int(b["mixInS"] * SR) : int((b["mixInS"] + total * p["rate"] + 1) * SR)]
+    b_src = xb[:, int(p["b0"] * SR) : int((p["b0"] + total * p["rate"] + 1) * SR)]
     b_part = stretch(b_src, p["rate"])
 
     n = int((pre + total) * SR)
@@ -219,14 +297,21 @@ def render(a, b, pre=16.0, post=24.0):
 
 
 def score(a, b, deck_a, deck_b, p, pre):
+    """Each deck's beats against one shared grid (A's, from the mix point), bar by bar.
+
+    Cross-correlating two different songs' onsets locks onto syncopation as easily as the beat;
+    measuring each deck against the same click grid and differencing does not.
+    """
     ea, eb = onset_env(deck_a), onset_env(deck_b)
-    s, e = int(pre * 100), int((pre + p["in"] + p["out"]) * 100)
-    win = max(200, int(4 * p["beat"] * 100))  # one bar, at least 2 s
+    beat = p["beat"]
+    end = pre + p["in"] + p["out"]
     lags = []
-    for w0 in range(s, max(s + 1, e - win), win // 2):
-        lag, c = lag_ms(ea[w0 : w0 + win], eb[w0 : w0 + win], p["beat"])
-        if c > 0.2:
-            lags.append(lag)
+    t = pre
+    while t + 4 * beat <= end + 1e-6:
+        grid = t + np.arange(8) * beat  # two bars per window, one bar step
+        grid = grid[grid <= end]
+        lags.append(grid_phase_ms(eb, grid, beat) - grid_phase_ms(ea, grid, beat))
+        t += 4 * beat
     return {
         "a": a["title"],
         "b": b["title"],
@@ -266,7 +351,12 @@ def main():
     bn = sub.add_parser("bench")
     bn.add_argument("--n", type=int, default=40)
     bn.add_argument("--seed", type=int, default=7)
+    bn.add_argument("--matchable", action="store_true", help="every pair close enough in tempo to beat-match")
+    for p in (r, bn):
+        p.add_argument("--grid", choices=["fitted", "local", "global"], default="fitted")
     args = ap.parse_args()
+    global GRID
+    GRID = getattr(args, "grid", GRID)
 
     if args.cmd == "fetch":
         return fetch(args.limit)
@@ -281,6 +371,13 @@ def main():
     ids = list(lib)
     random.Random(args.seed).shuffle(ids)
     pairs = [(ids[i], ids[(i + 1) % len(ids)]) for i in range(min(args.n, len(ids)))]
+    if args.matchable:
+        pairs = [
+            (ia, ib)
+            for ia in ids
+            for ib in ids
+            if ia != ib and tempo_rate(60 / lib[ia]["bpm"], 60 / lib[ib]["bpm"]) != 1.0
+        ][: args.n]
     rows = []
     for ia, ib in pairs:
         a, b = lib[ia], lib[ib]
@@ -297,6 +394,7 @@ def main():
         "",
         f"Tempo-matched: {len(matched)} of {len(rows)} (the rest are over {int(MAX_STRETCH * 100)}% apart and just crossfade).",
         f"Beats within 20 ms: {len(tight)} of {len(matched)} matched mixes.",
+        f"Median |lag| {int(np.median([abs(r['lagMs']) for r in matched])) if matched else '-'} ms, median |drift| {int(np.median([abs(r['driftMs'] or 0) for r in matched])) if matched else '-'} ms.",
         "",
         "| A | B | BPM | rate | lag ms | drift ms |",
         "|---|---|---|---|---|---|",

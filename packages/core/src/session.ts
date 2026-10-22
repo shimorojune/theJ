@@ -20,6 +20,8 @@ export type QueuedSong = Song & {
   bpm: number | null;
   mixInS: number | null;
   mixOutS: number | null;
+  mixInBeatS: number | null;
+  mixOutBeatS: number | null;
   audioDurationS: number | null;
   /** The song has a store preview the phone can start on before the full audio is pulled. */
   hasPreview: boolean;
@@ -372,6 +374,8 @@ async function state(tx: Tx, s: Session): Promise<QueueState> {
       bpm: cache?.bpm ?? song.tempo,
       mixInS: cache?.mixInS ?? null,
       mixOutS: cache?.mixOutS ?? null,
+      mixInBeatS: cache?.mixInBeatS ?? null,
+      mixOutBeatS: cache?.mixOutBeatS ?? null,
       audioDurationS: cache?.durationS ?? null,
       hasPreview: mayHavePreview(song.previewUrl),
       previewOffsetS: cache?.previewOffsetS ?? null,
