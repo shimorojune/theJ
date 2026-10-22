@@ -9,7 +9,9 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
+import { AppState } from "react-native";
 import EventSource from "react-native-sse";
 import { API_URL, ok, useApi } from "../lib/api";
 import { DEV_HEADERS, DEV_USER, useSession } from "../lib/auth";
@@ -40,9 +42,12 @@ async function createEngine(): Promise<Engine> {
   return new ExpoEngine();
 }
 
+/** What the engine is doing, without the playhead (that ticks; see `useProgress`). */
+export type PlayStatus = Omit<EngineStatus, "currentTime">;
+
 type Party = {
   queue: Queue | null;
-  status: EngineStatus;
+  status: PlayStatus;
   engine: "mixer" | "expo";
   starting: boolean;
   error: string | null;
@@ -64,20 +69,60 @@ type Party = {
   nowPlaying: { now: Song | undefined; next: Song | undefined };
 };
 
-const IDLE: EngineStatus = {
-  current: null,
-  playing: false,
-  buffering: false,
-  currentTime: 0,
-  duration: 0,
-};
+const IDLE: PlayStatus = { current: null, playing: false, buffering: false, duration: 0 };
+
+const sameStatus = (a: PlayStatus, b: PlayStatus) =>
+  a.current === b.current &&
+  a.playing === b.playing &&
+  a.buffering === b.buffering &&
+  a.duration === b.duration;
+
+/**
+ * The playhead, kept out of the party context: the engine reports it twice a second, and as
+ * context state it re-rendered every screen each time (taps landed late or not at all).
+ * Only the components that show it subscribe. Nothing is pushed while the app is in the
+ * background; the latest value is there on return.
+ */
+function createProgress() {
+  let time = 0;
+  let active = AppState.currentState !== "background";
+  const subs = new Set<() => void>();
+  const notify = () => {
+    for (const cb of subs) cb();
+  };
+  return {
+    get: () => time,
+    set(t: number) {
+      if (t === time) return;
+      time = t;
+      if (active) notify();
+    },
+    setActive(on: boolean) {
+      active = on;
+      if (on) notify();
+    },
+    subscribe(cb: () => void) {
+      subs.add(cb);
+      return () => subs.delete(cb);
+    },
+  };
+}
+type Progress = ReturnType<typeof createProgress>;
 
 const Ctx = createContext<Party | null>(null);
+const ProgressCtx = createContext<Progress | null>(null);
 export const useParty = () => {
   const p = useContext(Ctx);
   if (!p) throw new Error("useParty outside PartyProvider");
   return p;
 };
+
+/** Seconds into the song playing; re-renders only its caller, twice a second. */
+export function useProgress(): number {
+  const p = useContext(ProgressCtx);
+  if (!p) throw new Error("useProgress outside PartyProvider");
+  return useSyncExternalStore(p.subscribe, p.get);
+}
 
 /**
  * Owns the party: the server's committed queue (current + next 2) handed to a playback engine,
@@ -87,7 +132,10 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   const api = useApi();
   const { getToken, isSignedIn } = useSession();
   const engine = useRef<Engine | null>(null);
-  const [status, setStatus] = useState<EngineStatus>(IDLE);
+  const [status, setStatus] = useState<PlayStatus>(IDLE);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const [progress] = useState(createProgress);
   const [queue, setQueue] = useState<Queue | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +188,10 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     void createEngine().then((e) => {
       if (!alive) return e.destroy();
       engine.current = e;
-      offStatus = e.onStatus(setStatus);
+      offStatus = e.onStatus(({ currentTime, ...rest }) => {
+        progress.set(currentTime);
+        setStatus((prev) => (sameStatus(prev, rest) ? prev : rest));
+      });
       offTrack = e.onTrackChange(({ from, to, reason }) => {
         if (to) void sendRef.current(to, "start").catch(() => {});
         if (from) void sendRef.current(from, reason).catch((err) => setError(String(err)));
@@ -153,9 +204,31 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       engine.current?.destroy();
       engine.current = null;
     };
-  }, []);
+  }, [progress]);
+
+  // Back from the background: the stream may have died while the phone slept, so reconnect it
+  // and fetch the queue once, so nothing on screen is stale.
+  const [resumes, setResumes] = useState(0);
+  useEffect(() => {
+    let last = AppState.currentState;
+    const sub = AppState.addEventListener("change", (next) => {
+      progress.setActive(next === "active");
+      if (next === "active" && last !== "active") setResumes((n) => n + 1);
+      last = next;
+    });
+    return () => sub.remove();
+  }, [progress]);
+  useEffect(() => {
+    const id = sessionRef.current;
+    if (!resumes || !id) return;
+    void (async () => {
+      const res = await api.sessions[":id"].$get({ param: { id } });
+      if (res.ok && sessionRef.current === id) apply(await ok<Queue>(res));
+    })().catch(() => {});
+  }, [resumes, api, apply]);
 
   // Live queue changes from the server (a pad move from another phone, audio becoming ready).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a resume reconnects the stream
   useEffect(() => {
     if (!sessionId || !isSignedIn) return;
     let es: EventSource<"queue" | "ping"> | null = null;
@@ -182,7 +255,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       clearTimeout(retry);
       es?.close();
     };
-  }, [sessionId, isSignedIn, getToken, apply]);
+  }, [sessionId, isSignedIn, getToken, apply, resumes]);
 
   // Resume the last mood after the app restarts.
   useEffect(() => {
@@ -239,9 +312,9 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   const skip = useCallback(() => engine.current?.next("skip"), []);
   const jumpNext = useCallback(() => engine.current?.next("complete"), []);
   const togglePlay = useCallback(() => {
-    if (status.playing) engine.current?.pause();
+    if (statusRef.current.playing) engine.current?.pause();
     else engine.current?.play();
-  }, [status.playing]);
+  }, []);
   const restart = useCallback(() => engine.current?.restart(), []);
   const seek = useCallback((s: number) => engine.current?.seek(s), []);
   const toggleRepeat = useCallback(() => {
@@ -251,11 +324,12 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const liked = queue?.liked;
   const toggleLike = useCallback(async () => {
-    const id = status.current;
+    const id = statusRef.current.current;
     if (!id) return;
-    await send(id, queue?.liked.includes(id) ? "unlike" : "like");
-  }, [status.current, send, queue?.liked]);
+    await send(id, liked?.includes(id) ? "unlike" : "like");
+  }, [send, liked]);
 
   const end = useCallback(async () => {
     if (sessionId)
@@ -278,32 +352,54 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     return { now: i >= 0 ? committed[i] : undefined, next: i >= 0 ? committed[i + 1] : undefined };
   }, [queue, status.current]);
 
+  const value = useMemo<Party>(
+    () => ({
+      queue,
+      status,
+      engine: ENGINE,
+      starting,
+      error,
+      label,
+      start,
+      press,
+      skip,
+      jumpNext,
+      togglePlay,
+      restart,
+      seek,
+      repeat,
+      toggleRepeat,
+      toggleLike,
+      end,
+      upcoming,
+      nowPlaying,
+    }),
+    [
+      queue,
+      status,
+      starting,
+      error,
+      label,
+      start,
+      press,
+      skip,
+      jumpNext,
+      togglePlay,
+      restart,
+      seek,
+      repeat,
+      toggleRepeat,
+      toggleLike,
+      end,
+      upcoming,
+      nowPlaying,
+    ],
+  );
+
   return (
-    <Ctx.Provider
-      value={{
-        queue,
-        status,
-        engine: ENGINE,
-        starting,
-        error,
-        label,
-        start,
-        press,
-        skip,
-        jumpNext,
-        togglePlay,
-        restart,
-        seek,
-        repeat,
-        toggleRepeat,
-        toggleLike,
-        end,
-        upcoming,
-        nowPlaying,
-      }}
-    >
-      {children}
-    </Ctx.Provider>
+    <ProgressCtx.Provider value={progress}>
+      <Ctx.Provider value={value}>{children}</Ctx.Provider>
+    </ProgressCtx.Provider>
   );
 }
 

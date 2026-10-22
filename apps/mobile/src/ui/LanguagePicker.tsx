@@ -1,6 +1,17 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { LanguageChoice } from "../lib/prefs";
 import { c } from "../theme";
+import { tap } from "./kit";
+
+/** Which language leads a mixed set, as the Hindi share of songs the picker keeps to. */
+const LEADS = [
+  { id: "hi", label: "Hindi", share: 0.75, line: "About 3 in every 4 songs in Hindi" },
+  { id: "even", label: "Equal", share: 0.5, line: "Hindi and English take turns" },
+  { id: "en", label: "English", share: 0.25, line: "About 3 in every 4 songs in English" },
+] as const;
+
+/** The lead closest to a saved share (older builds saved any tenth from 0.1 to 0.9). */
+const leadFor = (share: number) => (share > 0.6 ? LEADS[0] : share < 0.4 ? LEADS[2] : LEADS[1]);
 
 const OPTIONS: { id: LanguageChoice; label: string; hint: string; c1: string; c2: string }[] = [
   { id: "en", label: "English", hint: "Pop, hip-hop, dance, indie", c1: "#46629E", c2: "#6E5BB0" },
@@ -20,7 +31,7 @@ export function LanguagePicker(props: {
   onChoice: (c: LanguageChoice) => void;
   onHiShare: (n: number) => void;
 }) {
-  const pct = Math.round(props.hiShare * 100);
+  const lead = leadFor(props.hiShare);
   return (
     <View style={{ gap: 10 }}>
       {OPTIONS.map((o) => {
@@ -30,8 +41,13 @@ export function LanguagePicker(props: {
             key={o.id}
             accessibilityRole="radio"
             accessibilityState={{ selected: on }}
+            onPressIn={tap}
             onPress={() => props.onChoice(o.id)}
-            style={[st.option, { borderColor: on ? c.accent : c.surface }]}
+            style={({ pressed }) => [
+              st.option,
+              { borderColor: on ? c.accent : c.surface },
+              pressed && { opacity: 0.75 },
+            ]}
           >
             <View style={st.swatch}>
               <View style={[st.sq, { left: 0, backgroundColor: o.c1 }]} />
@@ -54,31 +70,26 @@ export function LanguagePicker(props: {
       </View>
       {props.choice === "mix" ? (
         <View style={st.mix}>
-          <View style={st.mixRow}>
-            <Text style={st.hint}>Hindi {pct}%</Text>
-            <Text style={st.hint}>English {100 - pct}%</Text>
+          <Text style={st.label}>Which language leads?</Text>
+          <View style={st.seg} accessibilityRole="radiogroup">
+            {LEADS.map((l) => {
+              const on = lead.id === l.id;
+              return (
+                <Pressable
+                  key={l.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: on }}
+                  accessibilityLabel={`${l.label}. ${l.line}`}
+                  onPressIn={tap}
+                  onPress={() => props.onHiShare(l.share)}
+                  style={({ pressed }) => [st.segBtn, on && st.segOn, pressed && { opacity: 0.7 }]}
+                >
+                  <Text style={[st.segText, on && st.segTextOn]}>{l.label}</Text>
+                </Pressable>
+              );
+            })}
           </View>
-          <View style={st.mixRow}>
-            <Pressable
-              accessibilityLabel="More Hindi"
-              hitSlop={8}
-              onPress={() => props.onHiShare(Math.min(0.9, props.hiShare + 0.1))}
-              style={st.step}
-            >
-              <Text style={st.stepText}>−</Text>
-            </Pressable>
-            <View style={st.track}>
-              <View style={[st.fill, { width: `${pct}%` }]} />
-            </View>
-            <Pressable
-              accessibilityLabel="More English"
-              hitSlop={8}
-              onPress={() => props.onHiShare(Math.max(0.1, props.hiShare - 0.1))}
-              style={st.step}
-            >
-              <Text style={st.stepText}>+</Text>
-            </Pressable>
-          </View>
+          <Text style={st.hint}>{lead.line}</Text>
         </View>
       ) : null}
     </View>
@@ -112,13 +123,12 @@ const st = StyleSheet.create({
     marginTop: 10,
     backgroundColor: c.surface,
     borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    gap: 4,
+    padding: 16,
+    gap: 12,
   },
-  mixRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  step: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
-  stepText: { color: c.fg, fontSize: 20 },
-  track: { flex: 1, height: 3, borderRadius: 2, backgroundColor: c.track, marginHorizontal: 6 },
-  fill: { height: 3, borderRadius: 2, backgroundColor: c.accent },
+  seg: { flexDirection: "row", backgroundColor: "rgba(0,0,0,0.35)", borderRadius: 12, padding: 3 },
+  segBtn: { flex: 1, height: 42, borderRadius: 9, alignItems: "center", justifyContent: "center" },
+  segOn: { backgroundColor: c.accent },
+  segText: { color: c.fg2, fontSize: 14, fontWeight: "600" },
+  segTextOn: { color: c.bg },
 });

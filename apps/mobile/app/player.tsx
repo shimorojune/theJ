@@ -1,13 +1,15 @@
+import { Ionicons } from "@expo/vector-icons";
 import Slider from "@react-native-community/slider";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
+import { useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { fmtTime } from "../src/lib/types";
-import { useNowPlaying, useParty } from "../src/party/PartyProvider";
+import { useNowPlaying, useParty, useProgress } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
-import { IconButton } from "../src/ui/kit";
+import { IconButton, pressedStyle, tap } from "../src/ui/kit";
 import { Nudges } from "../src/ui/Nudges";
 
 export default function Player() {
@@ -128,23 +130,7 @@ export default function Player() {
             />
           </View>
 
-          <View style={{ gap: 6, marginTop: 12 }}>
-            <Slider
-              accessibilityLabel="Seek"
-              style={st.slider}
-              minimumValue={0}
-              maximumValue={status.duration || now.durationS || 1}
-              value={status.currentTime}
-              onSlidingComplete={seek}
-              minimumTrackTintColor={c.fg}
-              maximumTrackTintColor="rgba(255,255,255,0.18)"
-              thumbTintColor={c.fg}
-            />
-            <View style={st.times}>
-              <Text style={st.time}>{fmtTime(status.currentTime)}</Text>
-              <Text style={st.time}>{fmtTime(status.duration || now.durationS)}</Text>
-            </View>
-          </View>
+          <SeekBar duration={status.duration || now.durationS || 0} onSeek={seek} />
 
           <View style={st.controls}>
             <IconButton
@@ -157,17 +143,19 @@ export default function Player() {
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={status.playing ? "Pause" : "Play"}
+              onPressIn={tap}
               onPress={togglePlay}
-              style={st.play}
+              hitSlop={6}
+              style={({ pressed }) => [st.play, pressed && pressedStyle]}
             >
               {status.buffering && !status.playing ? (
                 <ActivityIndicator color={c.bg} />
               ) : (
-                <IconButton
+                <Ionicons
                   name={status.playing ? "pause" : "play"}
-                  label=""
+                  size={26}
                   color={c.bg}
-                  onPress={togglePlay}
+                  style={status.playing ? null : { marginLeft: 3 }}
                 />
               )}
             </Pressable>
@@ -183,8 +171,9 @@ export default function Player() {
           {next ? (
             <Pressable
               accessibilityLabel={`Play ${next.title} now`}
+              onPressIn={tap}
               onPress={jumpNext}
-              style={st.next}
+              style={({ pressed }) => [st.next, pressed && { opacity: 0.7 }]}
             >
               <Image source={next.thumbUrl} style={st.nextArt} contentFit="cover" />
               <View style={{ flex: 1, gap: 2 }}>
@@ -203,6 +192,40 @@ export default function Player() {
         </ScrollView>
       </SafeAreaView>
     </LinearGradient>
+  );
+}
+
+/**
+ * The seek bar and times: they follow the playhead on their own, and hold still while the
+ * thumb is being dragged so it doesn't jump back under the finger.
+ */
+function SeekBar({ duration, onSeek }: { duration: number; onSeek: (s: number) => void }) {
+  const time = useProgress();
+  const [drag, setDrag] = useState<number | null>(null);
+  const shown = drag ?? time;
+  return (
+    <View style={{ gap: 6, marginTop: 12 }}>
+      <Slider
+        accessibilityLabel="Seek"
+        style={st.slider}
+        minimumValue={0}
+        maximumValue={duration || 1}
+        value={shown}
+        onSlidingStart={setDrag}
+        onValueChange={(v) => drag !== null && setDrag(v)}
+        onSlidingComplete={(v) => {
+          setDrag(null);
+          onSeek(v);
+        }}
+        minimumTrackTintColor={c.fg}
+        maximumTrackTintColor="rgba(255,255,255,0.18)"
+        thumbTintColor={c.fg}
+      />
+      <View style={st.times}>
+        <Text style={st.time}>{fmtTime(shown)}</Text>
+        <Text style={st.time}>{fmtTime(duration)}</Text>
+      </View>
+    </View>
   );
 }
 

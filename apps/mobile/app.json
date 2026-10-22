@@ -18,7 +18,12 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ],
-      "blockedPermissions": ["android.permission.RECORD_AUDIO"]
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#0B0B0C"
+      }
     },
     "plugins": [
       "expo-router",
@@ -34,7 +39,16 @@
       ],
       "expo-image",
       "expo-web-browser",
-      "react-native-audio-api"
+      "react-native-audio-api",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "imageWidth": 180,
+          "resizeMode": "contain",
+          "backgroundColor": "#0B0B0C"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -62,6 +76,7 @@
         "projectId": "5eb57d7d-09a1-4206-b20d-76c244784990"
       }
     },
-    "owner": "shimorojune"
+    "owner": "shimorojune",
+    "icon": "./assets/icon.png"
   }
 }

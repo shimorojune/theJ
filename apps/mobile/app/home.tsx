@@ -6,7 +6,7 @@ import { useSession } from "../src/lib/auth";
 import { MOODS, type Mood } from "../src/lib/moods";
 import { useParty } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
-import { Screen } from "../src/ui/kit";
+import { Screen, tap } from "../src/ui/kit";
 import { MiniPlayer } from "../src/ui/MiniPlayer";
 
 /** Home (round 4, B): an Ask-the-DJ field over big mood bands. One tap and the music starts. */
@@ -35,8 +35,9 @@ export default function Home() {
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Settings"
+          onPressIn={tap}
           onPress={() => router.push("/settings")}
-          style={st.avatar}
+          style={({ pressed }) => [st.avatar, pressed && st.pressed]}
         >
           <Text style={st.avatarText}>{initial}</Text>
         </Pressable>
@@ -57,8 +58,9 @@ export default function Home() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Play this"
+            onPressIn={tap}
             onPress={askDj}
-            style={st.askGo}
+            style={({ pressed }) => [st.askGo, pressed && st.pressed]}
           >
             <Ionicons name="arrow-forward" size={20} color={c.bg} />
           </Pressable>
@@ -71,6 +73,7 @@ export default function Home() {
             key={m.id}
             accessibilityRole="button"
             accessibilityLabel={`Play ${m.label}`}
+            onPressIn={tap}
             onPress={() => play(m)}
             style={({ pressed }) => [st.band, { backgroundColor: m.bg }, pressed && st.pressed]}
           >

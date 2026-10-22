@@ -1,21 +1,21 @@
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { useNowPlaying, useParty } from "../party/PartyProvider";
+import { useNowPlaying, useParty, useProgress } from "../party/PartyProvider";
 import { c } from "../theme";
-import { IconButton } from "./kit";
+import { IconButton, tap } from "./kit";
 
 export function MiniPlayer() {
   const { status, togglePlay, skip } = useParty();
   const { now } = useNowPlaying();
   if (!now) return null;
-  const progress = status.duration ? status.currentTime / status.duration : 0;
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel="Open player"
+      onPressIn={tap}
       onPress={() => router.push("/player")}
-      style={st.bar}
+      style={({ pressed }) => [st.bar, pressed && { opacity: 0.85 }]}
     >
       <Image source={now.thumbUrl} style={st.art} contentFit="cover" />
       <View style={{ flex: 1, gap: 2 }}>
@@ -33,10 +33,19 @@ export function MiniPlayer() {
         onPress={togglePlay}
       />
       <IconButton name="play-skip-forward" label="Skip song" onPress={skip} />
-      <View style={st.track}>
-        <View style={[st.fill, { width: `${progress * 100}%` }]} />
-      </View>
+      <Track duration={status.duration} />
     </Pressable>
+  );
+}
+
+/** The progress line; only this re-renders as the song plays. */
+function Track({ duration }: { duration: number }) {
+  const time = useProgress();
+  const progress = duration ? Math.min(1, time / duration) : 0;
+  return (
+    <View style={st.track}>
+      <View style={[st.fill, { width: `${progress * 100}%` }]} />
+    </View>
   );
 }
 

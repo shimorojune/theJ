@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
 import { router } from "expo-router";
 import type { ReactNode } from "react";
 import {
@@ -12,6 +13,12 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { c } from "../theme";
+
+/** A tick under the finger the moment a press lands, before any work it starts. */
+export const tap = () => void Haptics.selectionAsync().catch(() => {});
+
+/** Every press shows itself: dimmed and pushed in a little while the finger is down. */
+export const pressedStyle = { opacity: 0.6, transform: [{ scale: 0.94 }] };
 
 export function Screen({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   return (
@@ -30,9 +37,14 @@ export function PrimaryButton(props: {
   return (
     <Pressable
       accessibilityRole="button"
+      onPressIn={tap}
       onPress={props.onPress}
       disabled={props.disabled || props.busy}
-      style={({ pressed }) => [s.primary, (pressed || props.disabled) && { opacity: 0.7 }]}
+      style={({ pressed }) => [
+        s.primary,
+        pressed && { transform: [{ scale: 0.98 }] },
+        (pressed || props.disabled) && { opacity: 0.7 },
+      ]}
     >
       {props.busy ? (
         <ActivityIndicator color={c.bg} />
@@ -45,7 +57,12 @@ export function PrimaryButton(props: {
 
 export function GhostButton(props: { label: string; onPress: () => void }) {
   return (
-    <Pressable accessibilityRole="button" onPress={props.onPress} style={s.ghost}>
+    <Pressable
+      accessibilityRole="button"
+      onPressIn={tap}
+      onPress={props.onPress}
+      style={({ pressed }) => [s.ghost, pressed && { opacity: 0.5 }]}
+    >
       <Text style={s.ghostText}>{props.label}</Text>
     </Pressable>
   );
@@ -62,9 +79,11 @@ export function IconButton(props: {
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={props.label}
+      onPressIn={props.onPress ? tap : undefined}
       onPress={props.onPress}
       hitSlop={8}
-      style={s.icon}
+      android_ripple={{ color: "rgba(255,255,255,0.18)", borderless: true, radius: 24 }}
+      style={({ pressed }) => [s.icon, pressed && pressedStyle]}
     >
       <Ionicons name={props.name} size={props.size ?? 22} color={props.color ?? c.fg} />
     </Pressable>

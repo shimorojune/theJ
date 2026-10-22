@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { Queue } from "../lib/types";
 import { c } from "../theme";
+import { tap } from "./kit";
 
 const NUDGES: { button: Button; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { button: "hype", label: "More energy", icon: "arrow-up" },
@@ -68,16 +69,18 @@ export function Nudges({
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ selected: !now }}
+          onPressIn={tap}
           onPress={() => setNow(false)}
-          style={[st.segBtn, !now && st.segOn]}
+          style={({ pressed }) => [st.segBtn, !now && st.segOn, pressed && { opacity: 0.7 }]}
         >
           <Text style={[st.segText, !now && st.segTextOn]}>From the next song</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ selected: now }}
+          onPressIn={tap}
           onPress={() => setNow(true)}
-          style={[st.segBtn, now && st.segOn]}
+          style={({ pressed }) => [st.segBtn, now && st.segOn, pressed && { opacity: 0.7 }]}
         >
           <Text style={[st.segText, now && st.segTextOn]}>Mix it in now</Text>
         </Pressable>

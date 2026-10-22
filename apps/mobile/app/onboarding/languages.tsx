@@ -8,7 +8,7 @@ import { LanguagePicker } from "../../src/ui/LanguagePicker";
 export default function Languages() {
   const { save } = usePrefs();
   const [choice, setChoice] = useState<LanguageChoice>("mix");
-  const [hiShare, setHiShare] = useState(0.6);
+  const [hiShare, setHiShare] = useState(0.5);
   const [busy, setBusy] = useState(false);
 
   const next = async () => {
