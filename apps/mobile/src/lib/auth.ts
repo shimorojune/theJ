@@ -1,8 +1,19 @@
 import { useAuth, useUser } from "@clerk/expo";
 import { useCallback } from "react";
 
-/** Set EXPO_PUBLIC_DEV_USER to skip Clerk; the api accepts the same name in dev (DEV_AUTH=1). */
+/**
+ * Set EXPO_PUBLIC_DEV_USER to skip Clerk. A local api accepts it with DEV_AUTH=1; a deployed one
+ * needs EXPO_PUBLIC_DEV_TOKEN to match its DEV_AUTH_TOKEN.
+ */
 export const DEV_USER = process.env.EXPO_PUBLIC_DEV_USER || null;
+export const DEV_HEADERS: Record<string, string> = DEV_USER
+  ? {
+      "x-dev-user": DEV_USER,
+      ...(process.env.EXPO_PUBLIC_DEV_TOKEN
+        ? { "x-dev-token": process.env.EXPO_PUBLIC_DEV_TOKEN }
+        : {}),
+    }
+  : {};
 
 export type SessionInfo = {
   isLoaded: boolean;

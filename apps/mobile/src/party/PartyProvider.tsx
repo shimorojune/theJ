@@ -12,7 +12,7 @@ import {
 } from "react";
 import EventSource from "react-native-sse";
 import { API_URL, ok, useApi } from "../lib/api";
-import { DEV_USER, useSession } from "../lib/auth";
+import { DEV_HEADERS, DEV_USER, useSession } from "../lib/auth";
 import type { Queue, Song } from "../lib/types";
 import type { Engine, EngineStatus } from "./engine";
 
@@ -145,7 +145,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       const token = await getToken();
       if (closed) return;
       es = new EventSource<"queue" | "ping">(`${API_URL}/sessions/${sessionId}/stream`, {
-        headers: DEV_USER ? { "x-dev-user": DEV_USER } : { Authorization: `Bearer ${token}` },
+        headers: DEV_USER ? DEV_HEADERS : { Authorization: `Bearer ${token}` },
         pollingInterval: 0,
       });
       es.addEventListener("queue", (e) => {

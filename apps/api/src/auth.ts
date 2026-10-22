@@ -7,8 +7,10 @@ export type AuthVars = { Variables: { userId: string } };
 
 /** Verifies the Clerk session JWT from `Authorization: Bearer <token>`. */
 export const requireAuth = createMiddleware<AuthVars>(async (c, next) => {
-  const devUser = devAuth ? c.req.header("x-dev-user") : undefined;
-  if (devUser) {
+  const devUser = c.req.header("x-dev-user");
+  const devToken = c.req.header("x-dev-token");
+  const devOk = devAuth || (env.DEV_AUTH_TOKEN !== undefined && devToken === env.DEV_AUTH_TOKEN);
+  if (devUser && devOk) {
     c.set("userId", `dev_${devUser}`);
     return next();
   }

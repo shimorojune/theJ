@@ -2,7 +2,7 @@
 # Secrets come from Dokploy > Compose > Environment:
 #   required: POSTGRES_PASSWORD, AUDIO_URL_SIGNING_SECRET, TS_AUTHKEY, HOME_PROXY_IP, PROXY_PASS
 #   catalog:  OPENROUTER_API_KEY (tagging), JEV_API_KEY (later)
-#   later:    CLERK_SECRET_KEY, FALLBACK_PROXY
+#   optional: CLERK_SECRET_KEY, FALLBACK_PROXY, DEV_AUTH_TOKEN (dev builds skip Clerk with x-dev-user + x-dev-token)
 # api is the only service with a public domain (via Dokploy Traefik on dokploy-network).
 # The compose keeps the probe's project name, so the Tailscale node identity (ts-state) carries over.
 services:
@@ -12,6 +12,7 @@ services:
       DATABASE_URL: postgres://thej:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/thej
       REDIS_URL: redis://redis:6379
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      DEV_AUTH_TOKEN: ${DEV_AUTH_TOKEN:-}
       AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET:?set AUDIO_URL_SIGNING_SECRET}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://thej.rraj.dev}
       STREAM_DIR: /data/stream

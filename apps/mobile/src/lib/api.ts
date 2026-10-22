@@ -1,7 +1,7 @@
 import type { AppType } from "@thej/api";
 import { hc } from "hono/client";
 import { useMemo } from "react";
-import { DEV_USER, useSession } from "./auth";
+import { DEV_HEADERS, DEV_USER, useSession } from "./auth";
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://thej.rraj.dev";
 
@@ -9,7 +9,7 @@ export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://thej.rraj.dev
 export function createApi(getToken: () => Promise<string | null>) {
   return hc<AppType>(API_URL, {
     headers: async (): Promise<Record<string, string>> => {
-      if (DEV_USER) return { "x-dev-user": DEV_USER };
+      if (DEV_USER) return DEV_HEADERS;
       const token = await getToken();
       return token ? { Authorization: `Bearer ${token}` } : {};
     },
