@@ -21,12 +21,12 @@ export default function Queue() {
   const { queue, upcoming } = useParty();
   const { now } = useNowPlaying();
   const plan = useQuery({
-    queryKey: ["plan", queue?.sessionId, queue?.goal, now?.videoId],
+    queryKey: ["plan", queue?.sessionId, queue?.goal, now?.songId],
     queryFn: upcoming,
     enabled: Boolean(queue),
   });
   if (!queue) return null;
-  const next = queue.committed.filter((s) => s.videoId !== now?.videoId);
+  const next = queue.committed.filter((s) => s.songId !== now?.songId);
 
   return (
     <Screen>
@@ -61,7 +61,7 @@ export default function Queue() {
             <Text style={st.meta}>Ready to play</Text>
           </View>
           {next.map((s) => (
-            <Row key={s.videoId} song={s} />
+            <Row key={s.songId} song={s} />
           ))}
         </View>
 
@@ -71,7 +71,7 @@ export default function Queue() {
             <Text style={st.meta}>Changes with the vibe</Text>
           </View>
           {(plan.data ?? []).map((s, i, all) => (
-            <Row key={s.videoId} song={s} faded subtitle={why(s, all[i - 1] ?? next.at(-1))} />
+            <Row key={s.songId} song={s} faded subtitle={why(s, all[i - 1] ?? next.at(-1))} />
           ))}
         </View>
       </ScrollView>

@@ -19,7 +19,7 @@ const api = hc<AppType>(base, { headers });
 const stateFile = new URL("../.cli-session", import.meta.url);
 
 type Song = {
-  videoId: string;
+  songId: string;
   title: string;
   artist: string;
   energy: number | null;
@@ -82,7 +82,7 @@ if (cmd === "start") {
   const event = cmd === "done" ? "complete" : cmd;
   const res = await api.sessions[":id"].events.$post({
     param: { id },
-    json: { videoId: now.videoId, event },
+    json: { songId: now.songId, event },
   });
   show(await json<Q>(res));
 } else if (cmd === "play") {
@@ -92,12 +92,12 @@ if (cmd === "start") {
     if (!now) break;
     await api.sessions[":id"].events.$post({
       param: { id },
-      json: { videoId: now.videoId, event: "start" },
+      json: { songId: now.songId, event: "start" },
     });
     const q = await json<Q>(
       await api.sessions[":id"].events.$post({
         param: { id },
-        json: { videoId: now.videoId, event: "complete" },
+        json: { songId: now.songId, event: "complete" },
       }),
     );
     console.log(

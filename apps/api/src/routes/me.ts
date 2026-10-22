@@ -1,10 +1,12 @@
 import { zValidator } from "@hono/zod-validator";
+import { likedSongs, recentlyPlayed } from "@thej/core";
 import { users } from "@thej/db";
 import { Language } from "@thej/shared";
 import { Hono } from "hono";
 import { z } from "zod";
 import { type AuthVars, requireAuth } from "../auth";
 import { db } from "../deps";
+import { toSong } from "../present";
 
 const Prefs = z.object({
   languages: z.array(Language).min(1).optional(),
@@ -35,4 +37,6 @@ export const me = new Hono<AuthVars>()
       })
       .returning();
     return c.json(u);
-  });
+  })
+  .get("/liked", async (c) => c.json((await likedSongs(db, c.get("userId"))).map(toSong)))
+  .get("/recent", async (c) => c.json((await recentlyPlayed(db, c.get("userId"))).map(toSong)));

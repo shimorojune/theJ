@@ -36,6 +36,20 @@
       "when": 1792620950034,
       "tag": "0004_brief_mariko_yashida",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792635008224,
+      "tag": "0005_chubby_sauron",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792635430609,
+      "tag": "0006_short_skreet",
+      "breakpoints": true
     }
   ]
 }

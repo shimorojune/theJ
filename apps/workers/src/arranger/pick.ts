@@ -1,6 +1,6 @@
+import { embedTexts } from "@thej/core";
 import { songs } from "@thej/db";
 import { sql } from "drizzle-orm";
-import { embedTexts } from "../catalog/embed";
 import { db } from "../lib/db";
 
 /** A JS string[] as a Postgres text[] literal (drizzle would expand it into a row constructor). */

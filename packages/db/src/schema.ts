@@ -1,5 +1,6 @@
 import {
   bigint,
+  boolean,
   customType,
   index,
   integer,
@@ -84,6 +85,9 @@ export const sessions = pgTable("sessions", {
   goal: jsonb("goal").notNull(),
   target: jsonb("target").notNull(),
   filters: jsonb("filters").notNull().default({}),
+  /** The mood in words ("sad nostalgic bollywood"); its embedding anchors the candidate search. */
+  moodText: text("mood_text"),
+  moodEmbedding: vector384("mood_embedding"),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
 });
@@ -95,9 +99,10 @@ export const queueItems = pgTable(
       .notNull()
       .references(() => sessions.id),
     position: integer("position").notNull(),
-    videoId: text("video_id")
-      .notNull()
-      .references(() => tracks.videoId),
+    /** v2 (tracks table); kept for old rows. */
+    videoId: text("video_id"),
+    /** v3 catalog song. */
+    songId: text("song_id").references(() => songs.id),
     state: queueState("state").notNull().default("planned"),
   },
   (t) => [primaryKey({ columns: [t.sessionId, t.position] })],
@@ -109,7 +114,8 @@ export const playEvents = pgTable(
     id: bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity(),
     userId: text("user_id").notNull(),
     sessionId: text("session_id").notNull(),
-    videoId: text("video_id").notNull(),
+    videoId: text("video_id"),
+    songId: text("song_id"),
     event: playEventKind("event").notNull(),
     at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -143,6 +149,10 @@ export const songs = pgTable(
     previewUrl: text("preview_url"),
     thumbUrl: text("thumb_url"),
     tempo: real("tempo"),
+    key: text("key"),
+    scale: text("scale"),
+    /** Set when YouTube resolution or pulling failed; the arranger skips these. */
+    unavailableAt: timestamp("unavailable_at", { withTimezone: true }),
     energy: real("energy"),
     valence: real("valence"),
     dance: real("dance"),
@@ -196,4 +206,31 @@ export const playlistSongs = pgTable(
     primaryKey({ columns: [t.playlistId, t.songId] }),
     index("playlist_songs_song_idx").on(t.songId),
   ],
+);
+
+/** Audio pulled on demand for a queued song. Lives in the streamer's temp dir; rows are deleted with the files. */
+export const audioCache = pgTable(
+  "audio_cache",
+  {
+    songId: text("song_id")
+      .primaryKey()
+      .references(() => songs.id),
+    path: text("path").notNull(),
+    bytes: integer("bytes").notNull(),
+    durationS: real("duration_s").notNull(),
+    bpm: real("bpm"),
+    /** Beat times in seconds, from the analyser. */
+    beats: jsonb("beats").$type<number[]>().notNull().default([]),
+    beatConfidence: real("beat_confidence"),
+    key: text("key"),
+    scale: text("scale"),
+    /** Where the next song should start coming in, and where this one can be faded out. */
+    mixInS: real("mix_in_s"),
+    mixOutS: real("mix_out_s"),
+    readyAt: timestamp("ready_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Warm-set songs survive the cleanup sweep. */
+    pinned: boolean("pinned").notNull().default(false),
+  },
+  (t) => [index("audio_cache_last_used_idx").on(t.lastUsedAt)],
 );

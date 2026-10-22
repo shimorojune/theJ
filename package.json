@@ -20,7 +20,7 @@
     "lint": "biome check .",
     "format": "biome check --write .",
     "workers:up": "docker compose -f infra/dev.compose.yml --env-file .env --profile workers up -d --build",
-    "workers:logs": "docker compose -f infra/dev.compose.yml --profile workers logs -f fetcher analysis",
+    "workers:logs": "docker compose -f infra/dev.compose.yml --profile workers logs -f streamer",
     "seed": "pnpm --filter @thej/workers seed",
     "status": "pnpm --filter @thej/workers status",
     "proxy:forward": "node infra/scripts/tailnet-forward.mjs",

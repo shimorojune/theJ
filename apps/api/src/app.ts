@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
+import { db, getQueue, watchStreamReady } from "./deps";
 import { audio } from "./routes/audio";
 import { me } from "./routes/me";
-import { sessions } from "./routes/sessions";
+import { changed, sessions } from "./routes/sessions";
 
 export const app = new Hono()
   .use(logger())
@@ -16,6 +17,10 @@ export const app = new Hono()
     console.error(err);
     return c.json({ error: "internal error" }, 500);
   });
+
+void watchStreamReady(async (sessionId) => {
+  await changed(await getQueue(db, sessionId));
+});
 
 /** Imported by the mobile app and the CLI for the typed Hono RPC client. */
 export type AppType = typeof app;

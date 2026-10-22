@@ -1,34 +1,50 @@
-import { getAudio, verifyAudioSig } from "@thej/core";
-import { tracks } from "@thej/db";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { verifyAudioSig } from "@thej/core";
+import { audioCache } from "@thej/db";
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { db } from "../deps";
 import { env } from "../env";
 
-/** Streams cached audio from MinIO. Auth is the signed URL, since the native player can't send headers. */
-export const audio = new Hono().get("/:videoId", async (c) => {
-  const videoId = c.req.param("videoId");
+/**
+ * Streams a pulled song from the streamer's shared directory. Auth is the signed URL, since the
+ * native player can't send headers. Supports HTTP ranges so the phone can seek and pre-buffer.
+ */
+export const audio = new Hono().get("/:songId", async (c) => {
+  const songId = c.req.param("songId");
   const ok = verifyAudioSig(
-    videoId,
+    songId,
     Number(c.req.query("exp")),
     c.req.query("sig") ?? "",
     env.AUDIO_URL_SIGNING_SECRET,
   );
   if (!ok) return c.json({ error: "bad or expired signature" }, 403);
 
-  const [t] = await db
-    .select({ key: tracks.audioKey })
-    .from(tracks)
-    .where(eq(tracks.videoId, videoId));
-  if (!t?.key) return c.json({ error: "not cached" }, 404);
+  const [row] = await db
+    .select({ path: audioCache.path })
+    .from(audioCache)
+    .where(eq(audioCache.songId, songId));
+  if (!row) return c.json({ error: "not ready" }, 404);
+  const path = env.STREAM_DIR ? row.path.replace(/^.*\/stream\//, `${env.STREAM_DIR}/`) : row.path;
+  const { size } = await stat(path).catch(() => ({ size: 0 }));
+  if (!size) return c.json({ error: "not ready" }, 404);
+  void db.update(audioCache).set({ lastUsedAt: new Date() }).where(eq(audioCache.songId, songId));
 
-  const a = await getAudio(t.key, c.req.header("range"));
+  const range = c.req.header("range");
+  const m = range ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+  const start = m?.[1] ? Number(m[1]) : 0;
+  const end = m?.[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+  if (start >= size) return c.body(null, 416, { "Content-Range": `bytes */${size}` });
+
+  const body = Readable.toWeb(createReadStream(path, { start, end })) as ReadableStream;
   const headers: Record<string, string> = {
-    "Content-Type": a.contentType,
+    "Content-Type": "audio/mp4",
     "Accept-Ranges": "bytes",
+    "Content-Length": String(end - start + 1),
     "Cache-Control": "private, max-age=3600",
   };
-  if (a.contentLength !== undefined) headers["Content-Length"] = String(a.contentLength);
-  if (a.contentRange) headers["Content-Range"] = a.contentRange;
-  return c.body(a.body, a.partial ? 206 : 200, headers);
+  if (m) headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+  return c.body(body, m ? 206 : 200, headers);
 });

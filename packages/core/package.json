@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1154.0",
+    "@huggingface/transformers": "^4.3.1",
     "@thej/db": "workspace:*",
     "@thej/shared": "workspace:*",
     "bullmq": "^6.4.0",

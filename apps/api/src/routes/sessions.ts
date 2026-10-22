@@ -8,28 +8,30 @@ import {
   previewPlan,
   type QueueState,
   recordEvent,
+  setMood,
   startSession,
 } from "@thej/core";
-import { ControlRequest, Language, PlayEventKind, Vibe, VideoId } from "@thej/shared";
+import { ControlRequest, Language, PlayEventKind, Vibe } from "@thej/shared";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { type AuthVars, requireAuth } from "../auth";
 import { db, publish, queues, subscribe } from "../deps";
-import { toQueueEvent, toQueueTrack } from "../present";
+import { toQueueEvent, toSong } from "../present";
 
 const StartBody = z.object({
   languages: z.array(Language).min(1).optional(),
   vibe: Vibe.optional(),
+  moodText: z.string().max(300).optional(),
 });
-const EventBody = z.object({ videoId: VideoId, event: PlayEventKind });
+const EventBody = z.object({ songId: z.string(), event: PlayEventKind });
 
-/** Push the new queue to every open stream, and ask the planner for more songs if needed. */
-async function changed(q: QueueState) {
+/** Push the new queue to every open stream and pull audio for anything not ready yet. */
+export async function changed(q: QueueState) {
   const event = toQueueEvent(q);
   await publish(q.sessionId, event);
-  if (q.lowPool) await queues.enqueueRefill(q.sessionId);
+  for (const [i, songId] of q.needsAudio.entries()) await queues.enqueueStream(songId, i + 1);
   return event;
 }
 
@@ -49,8 +51,9 @@ export const sessions = new Hono<AuthVars>()
   .get("/:id", async (c) => {
     const id = c.req.param("id");
     await owned(id, c.get("userId"));
-    const [q, plan] = await Promise.all([getQueue(db, id), previewPlan(db, id)]);
-    return c.json({ ...toQueueEvent(q), upcoming: plan.map(toQueueTrack) });
+    const q = await getQueue(db, id);
+    const plan = await previewPlan(db, id);
+    return c.json({ ...(await changed(q)), upcoming: plan.map(toSong) });
   })
   .get("/:id/stream", async (c) => {
     const id = c.req.param("id");
@@ -61,7 +64,7 @@ export const sessions = new Hono<AuthVars>()
       });
       await stream.writeSSE({
         event: "queue",
-        data: JSON.stringify(toQueueEvent(await getQueue(db, id))),
+        data: JSON.stringify(await changed(await getQueue(db, id))),
       });
       // Keep proxies from closing an idle stream.
       while (!stream.aborted) {
@@ -75,19 +78,20 @@ export const sessions = new Hono<AuthVars>()
     const id = c.req.param("id");
     await owned(id, c.get("userId"));
     const body = c.req.valid("json");
-    if (body.kind === "text") {
-      return c.json({ error: "text requests arrive with the LLM layer (build step 4)" }, 501);
-    }
-    return c.json(await changed(await control(db, id, body.button, body.now)));
+    const q =
+      body.kind === "text"
+        ? await setMood(db, id, body.text, body.vibe)
+        : await control(db, id, body.kind === "pad" ? body.vibe : body.button, body.now);
+    return c.json(await changed(q));
   })
   .post("/:id/events", zValidator("json", EventBody), async (c) => {
     const id = c.req.param("id");
     const userId = c.get("userId");
     await owned(id, userId);
-    const { videoId, event } = c.req.valid("json");
-    await recordEvent(db, userId, id, videoId, event);
+    const { songId, event } = c.req.valid("json");
+    await recordEvent(db, userId, id, songId, event);
     if (event === "skip" || event === "complete") {
-      return c.json(await changed(await advance(db, id, videoId, event)));
+      return c.json(await changed(await advance(db, id, songId, event)));
     }
     // like / unlike: answer with the queue so the app can show the new state.
     return c.json(toQueueEvent(await getQueue(db, id)));

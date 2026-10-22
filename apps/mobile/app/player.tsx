@@ -90,8 +90,8 @@ export default function Player() {
               </View>
             ) : null}
             <IconButton
-              name={queue.liked.includes(now.videoId) ? "heart" : "heart-outline"}
-              label={queue.liked.includes(now.videoId) ? "Unlike" : "Like"}
+              name={queue.liked.includes(now.songId) ? "heart" : "heart-outline"}
+              label={queue.liked.includes(now.songId) ? "Unlike" : "Like"}
               color={c.accent}
               onPress={() => void toggleLike()}
             />

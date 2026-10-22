@@ -21,25 +21,36 @@ export type Button = z.infer<typeof Button>;
 
 export const ControlRequest = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("button"), button: Button, now: z.boolean().default(false) }),
-  z.object({ kind: z.literal("text"), text: z.string().min(1).max(500) }),
+  /** The mood pad: an absolute goal. */
+  z.object({ kind: z.literal("pad"), vibe: Vibe, now: z.boolean().default(false) }),
+  /** Ask the DJ / a saved mood: new words for the mood, optionally a new vibe too. */
+  z.object({ kind: z.literal("text"), text: z.string().min(1).max(500), vibe: Vibe.optional() }),
 ]);
 export type ControlRequest = z.infer<typeof ControlRequest>;
 
 export const PlayEventKind = z.enum(["start", "skip", "like", "unlike", "complete"]);
 export const PlayEvent = z.object({
   sessionId: z.string(),
-  videoId: VideoId,
+  songId: z.string(),
   event: PlayEventKind,
 });
 export type PlayEvent = z.infer<typeof PlayEvent>;
 
 export const QueueTrack = z.object({
-  videoId: VideoId,
+  songId: z.string(),
   title: z.string(),
   artist: z.string(),
   durationS: z.number(),
   thumbUrl: z.string().url(),
+  /** Signed stream URL; only valid once `ready`. */
   audioUrl: z.string().url(),
+  ready: z.boolean(),
+  bpm: z.number().nullable(),
+  /** Mix points in seconds, from the analyser; null until ready. */
+  mixInS: z.number().nullable(),
+  mixOutS: z.number().nullable(),
+  energy: z.number().nullable(),
+  valence: z.number().nullable(),
 });
 export type QueueTrack = z.infer<typeof QueueTrack>;
 
@@ -48,6 +59,7 @@ export const QueueEvent = z.object({
   sessionId: z.string(),
   committed: z.array(QueueTrack).max(3),
   /** Which of the committed songs the user has liked. */
-  liked: z.array(VideoId),
+  liked: z.array(z.string()),
+  moodText: z.string(),
 });
 export type QueueEvent = z.infer<typeof QueueEvent>;

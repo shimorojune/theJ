@@ -106,23 +106,25 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   /** Make the native playlist match the server's committed queue without interrupting the current song. */
   const apply = useCallback(
     (q: Queue) => {
-      for (const s of [...q.committed, ...(q.upcoming ?? [])]) songs.current.set(s.videoId, s);
+      for (const s of [...q.committed, ...(q.upcoming ?? [])]) songs.current.set(s.songId, s);
       setQueue((prev) => ({ ...q, upcoming: q.upcoming ?? prev?.upcoming }));
-      const ids = q.committed.map((s) => s.videoId);
+      // Only songs whose audio is pulled go into the native playlist; the rest arrive over SSE.
+      const playable = q.committed.filter((s) => s.ready !== false);
+      const ids = playable.map((s) => s.songId);
       const cur = playlist.currentIndex;
       const curId = loaded.current[cur];
 
       if (!curId || !ids.includes(curId)) {
         playlist.clear();
         loaded.current = [];
-        for (const s of q.committed) {
+        for (const s of playable) {
           playlist.add({ uri: s.audioUrl, name: s.title });
-          loaded.current.push(s.videoId);
+          loaded.current.push(s.songId);
         }
         last.current = { index: 0, time: 0, duration: 0 };
-        if (q.committed.length) {
+        if (playable.length) {
           playlist.play();
-          lockScreen(q.committed[0]);
+          lockScreen(playable[0]);
         }
         return;
       }
@@ -135,9 +137,9 @@ export function PartyProvider({ children }: { children: ReactNode }) {
           playlist.remove(i);
           loaded.current.splice(i, 1);
         }
-        for (const s of q.committed.slice(k + 1)) {
+        for (const s of playable.slice(k + 1)) {
           playlist.add({ uri: s.audioUrl, name: s.title });
-          loaded.current.push(s.videoId);
+          loaded.current.push(s.songId);
         }
       }
       if (q.skipTo && loaded.current[cur + 1] === q.skipTo) {
@@ -150,11 +152,11 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   );
 
   const send = useCallback(
-    async (videoId: string, event: "start" | "skip" | "complete" | "like" | "unlike") => {
+    async (songId: string, event: "start" | "skip" | "complete" | "like" | "unlike") => {
       if (!sessionId) return;
       const res = await api.sessions[":id"].events.$post({
         param: { id: sessionId },
-        json: { videoId, event },
+        json: { songId, event },
       });
       if (res.status === 200) apply(await ok<Queue>(res));
     },
@@ -247,7 +249,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         await SecureStore.setItemAsync(SESSION_KEY, q.sessionId);
         apply(q);
         const first = q.committed[0];
-        if (first) void send(first.videoId, "start").catch(() => {});
+        if (first) void send(first.songId, "start").catch(() => {});
       } catch (e) {
         setError(String(e));
         throw e;

@@ -1,8 +1,7 @@
 name: thej
 # Local dev services. `pnpm infra:up` from the repo root.
-# The audio bucket is created by the workers on startup (ensureBucket).
-# `pnpm workers:up` also builds and runs the fetcher (+ bgutil) and analysis workers in Docker,
-# so yt-dlp and ffmpeg don't need installing on the Mac. HOME_PROXY comes from the root .env.
+# `pnpm workers:up` also builds and runs the streamer (+ bgutil) in Docker, so yt-dlp, ffmpeg and
+# Essentia don't need installing on the Mac. HOME_PROXY comes from the root .env.
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -28,27 +27,23 @@ services:
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
     init: true
 
-  fetcher:
+  # On-demand audio: resolve, pull through the home proxy, analyse, serve from ./.data/stream.
+  # amd64 image (Essentia); emulated on Apple Silicon, so analysis takes ~40 s here vs ~5 s on the VPS.
+  streamer:
     profiles: [workers]
-    build: { context: .., dockerfile: apps/workers/fetcher.Dockerfile }
-    environment: &worker-env
+    build: { context: .., dockerfile: apps/workers/streamer.Dockerfile }
+    platform: linux/amd64
+    environment:
       DATABASE_URL: postgres://thej:thej@postgres:5432/thej
       REDIS_URL: redis://redis:6379
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: audio
-      S3_ACCESS_KEY_ID: thej
-      S3_SECRET_ACCESS_KEY: thej-dev-secret
       HOME_PROXY: ${HOME_PROXY:-}
       FALLBACK_PROXY: ${FALLBACK_PROXY:-}
       BGUTIL_URL: http://bgutil:4416
-    depends_on: [postgres, redis, minio, bgutil]
-
-  analysis:
-    profiles: [workers]
-    build: { context: .., dockerfile: apps/workers/Dockerfile }
-    command: ["node", "--import", "tsx", "src/analysis/index.ts"]
-    environment: *worker-env
-    depends_on: [postgres, redis, minio]
+      STREAM_DIR: /data/stream
+      STREAM_CONCURRENCY: "2"
+    volumes:
+      - ../.data/stream:/data/stream
+    depends_on: [postgres, redis, bgutil]
 
 volumes:
   pg-data:

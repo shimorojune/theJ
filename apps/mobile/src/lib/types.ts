@@ -1,12 +1,17 @@
 import type { Vibe } from "@thej/shared";
 
 export type Song = {
-  videoId: string;
+  songId: string;
   title: string;
   artist: string;
   durationS: number;
   thumbUrl: string;
   audioUrl: string;
+  /** Audio is pulled and playable. Until then the song is listed but not loaded. */
+  ready?: boolean;
+  bpm?: number | null;
+  mixInS?: number | null;
+  mixOutS?: number | null;
   energy: number | null;
   valence: number | null;
   tempo: number | null;
@@ -17,6 +22,7 @@ export type Queue = {
   sessionId: string;
   committed: Song[];
   liked: string[];
+  moodText?: string;
   goal: Vibe;
   target: Vibe;
   skipTo?: string;

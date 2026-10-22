@@ -1,23 +1,9 @@
-import { pipeline } from "@huggingface/transformers";
+import { embedTexts } from "@thej/core";
 import { songs } from "@thej/db";
 import { eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "../lib/db";
 
-/** all-MiniLM-L6-v2, 384 dims, runs on the CPU: ~2,000 songs a second once loaded. */
-let model: Promise<Awaited<ReturnType<typeof pipeline>>> | undefined;
-const load = () =>
-  (model ??= pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", { dtype: "fp32" }));
-
-export async function embedTexts(texts: string[]): Promise<number[][]> {
-  const embed = (await load()) as unknown as (
-    input: string[],
-    opts: { pooling: "mean"; normalize: boolean },
-  ) => Promise<{ data: Float32Array; dims: number[] }>;
-  const out = await embed(texts, { pooling: "mean", normalize: true });
-  const data = out.data as Float32Array;
-  const dims = out.dims[1] as number;
-  return texts.map((_, i) => Array.from(data.slice(i * dims, (i + 1) * dims)));
-}
+export { embedTexts };
 
 type Row = { id: string; title: string; artist: string; labels: string[]; era: string | null };
 

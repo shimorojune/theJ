@@ -195,6 +195,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1154.0
         version: 3.1154.0
+      '@huggingface/transformers':
+        specifier: ^4.3.1
+        version: 4.3.1(@types/node@24.19.2)
       '@thej/db':
         specifier: workspace:*
         version: link:../db
