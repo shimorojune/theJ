@@ -43,6 +43,9 @@ services:
       TAG_SHARD: 0/1
     depends_on: *after-migrate
     restart: "no"
+    # Background work yields to the api: low CPU weight and a hard cap.
+    cpu_shares: 256
+    cpus: "1.0"
 
   # Streamer, bgutil and tailscale share one network namespace. Tailscale also joins the
   # default network so the streamer can reach postgres and redis by name.
@@ -83,6 +86,8 @@ services:
       tailscale: { condition: service_started }
       bgutil: { condition: service_started }
     restart: unless-stopped
+    cpu_shares: 512
+    cpus: "1.5"
 
   postgres:
     image: pgvector/pgvector:pg17
