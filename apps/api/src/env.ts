@@ -12,7 +12,11 @@ export const env = z
     /** Dev only: accept `x-dev-user: <id>` instead of a Clerk token. Ignored in production. */
     DEV_AUTH: z.enum(["0", "1"]).default("0"),
     /** Lets a dev build skip Clerk against a deployed api: `x-dev-user` + `x-dev-token`. */
-    DEV_AUTH_TOKEN: z.string().min(16).optional(),
+    DEV_AUTH_TOKEN: z
+      .string()
+      .optional()
+      .transform((v) => v || undefined)
+      .pipe(z.string().min(16).optional()),
     /** Where the streamer's files are mounted here, if the path differs from the streamer's view. */
     STREAM_DIR: z.string().optional(),
     NODE_ENV: z.string().default("development"),
