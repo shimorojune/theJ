@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 
 # so a fresh container splits without a download. Before the nightly yt-dlp layer so a CACHEBUST
 # rebuild doesn't pull torch again.
 RUN pip install --break-system-packages -q "torch==2.5.1+cpu" --extra-index-url https://download.pytorch.org/whl/cpu \
-  && pip install --break-system-packages -q demucs==4.1.0 av==13.1.0 \
+  && pip install --break-system-packages -q demucs==4.1.0 av==13.1.0 "numpy<2" \
   && python3 -c "from demucs.pretrained import get_model; get_model('htdemucs')"
 ARG CACHEBUST
 RUN pip install --break-system-packages -q -U --pre "yt-dlp[default]" deno "bgutil-ytdlp-pot-provider==2.0.2" essentia
