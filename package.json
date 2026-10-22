@@ -28,7 +28,9 @@
     "cli": "pnpm --silent --filter @thej/api cli",
     "test": "pnpm -r --if-present test",
     "crawl": "pnpm --filter @thej/workers crawl",
-    "sets": "pnpm --filter @thej/workers sets"
+    "sets": "pnpm --filter @thej/workers sets",
+    "ship:apk": "apps/mobile/scripts/ship-apk.sh",
+    "ship:ota": "apps/mobile/scripts/ship-ota.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",

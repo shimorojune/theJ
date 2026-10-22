@@ -14,10 +14,11 @@ match is how far apart the beats really land (0 ms is perfect; a DJ hears 20 ms 
 flamming). Drift is the change in lag from the first window to the last.
 
 Env: THEJ_API (default https://thej.rraj.dev), THEJ_DEV_USER, THEJ_DEV_TOKEN.
-Needs numpy, scipy and av (tools/mixlab/requirements.txt).
+Needs numpy and av (tools/mixlab/requirements.txt); the DSP is ffmpeg's, through av.
 """
 
 import argparse
+from fractions import Fraction
 import json
 import os
 import random
@@ -27,7 +28,6 @@ from pathlib import Path
 
 import av
 import numpy as np
-from scipy.signal import lfilter
 
 HERE = Path(__file__).parent
 CACHE = HERE / ".cache"
@@ -86,47 +86,55 @@ def load(song):
 # --- dsp ---------------------------------------------------------------------------------
 
 
-def stretch(x, rate):
-    """Play `x` `rate` times faster with the pitch held (ffmpeg atempo, as phones do)."""
-    if abs(rate - 1) < 1e-4:
-        return x
+def ffmpeg(x, name, args):
+    """Run stereo float audio through one ffmpeg filter."""
     g = av.filter.Graph()
     src = g.add_abuffer(format="fltp", sample_rate=SR, layout="stereo", time_base=f"1/{SR}")
-    tempo = g.add("atempo", f"{rate:.6f}")
+    f = g.add(name, args)
+    fmt = g.add("aformat", "sample_fmts=fltp:channel_layouts=stereo")
     sink = g.add("abuffersink")
-    src.link_to(tempo)
-    tempo.link_to(sink)
+    src.link_to(f)
+    f.link_to(fmt)
+    fmt.link_to(sink)
     g.configure()
-    out, step = [], SR
-    for i in range(0, x.shape[1], step):
-        frame = av.AudioFrame.from_ndarray(np.ascontiguousarray(x[:, i : i + step]), format="fltp", layout="stereo")
-        frame.sample_rate = SR
-        frame.pts = i
-        frame.time_base = f"1/{SR}"
-        src.push(frame)
+    out = []
+
+    def drain():
         while True:
             try:
                 out.append(sink.pull().to_ndarray())
             except (av.BlockingIOError, av.EOFError):
-                break
+                return
+
+    for i in range(0, x.shape[1], SR):
+        frame = av.AudioFrame.from_ndarray(
+            np.ascontiguousarray(x[:, i : i + SR]), format="fltp", layout="stereo"
+        )
+        frame.sample_rate = SR
+        frame.pts = i
+        frame.time_base = Fraction(1, SR)
+        src.push(frame)
+        drain()
     src.push(None)
-    while True:
-        try:
-            out.append(sink.pull().to_ndarray())
-        except (av.BlockingIOError, av.EOFError):
-            break
+    drain()
     return np.concatenate(out, axis=1).astype(np.float32)
 
 
+# atempo's output runs about 20 ms early (measured on a click train, constant, no drift).
+ATEMPO_LEAD = int(0.020 * SR)
+
+
+def stretch(x, rate):
+    """Play `x` `rate` times faster with the pitch held, timing-corrected (ffmpeg atempo)."""
+    if abs(rate - 1) < 1e-4:
+        return x
+    return np.pad(ffmpeg(x, "atempo", f"{rate:.6f}"), ((0, 0), (ATEMPO_LEAD, 0)))
+
+
 def low_shelf(x, db):
-    """RBJ low shelf at BASS_HZ (the phone's BiquadFilterNode 'lowshelf')."""
-    a_ = 10 ** (db / 40)
-    w0 = 2 * np.pi * BASS_HZ / SR
-    alpha = np.sin(w0) / 2 * np.sqrt(2)
-    cw, sa = np.cos(w0), 2 * np.sqrt(a_) * alpha
-    b = [a_ * ((a_ + 1) - (a_ - 1) * cw + sa), 2 * a_ * ((a_ - 1) - (a_ + 1) * cw), a_ * ((a_ + 1) - (a_ - 1) * cw - sa)]
-    a = [(a_ + 1) + (a_ - 1) * cw + sa, -2 * ((a_ - 1) + (a_ + 1) * cw), (a_ + 1) + (a_ - 1) * cw - sa]
-    return lfilter(b, a, x, axis=1).astype(np.float32)
+    """Low shelf at BASS_HZ, slope 1 (the phone's BiquadFilterNode 'lowshelf')."""
+    y = ffmpeg(x, "lowshelf", f"g={db}:f={BASS_HZ}:t=s:w=1")
+    return y[:, : x.shape[1]] if y.shape[1] >= x.shape[1] else np.pad(y, ((0, 0), (0, x.shape[1] - y.shape[1])))
 
 
 def ramp(n, points):

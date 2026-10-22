@@ -25,7 +25,8 @@
         "EXPO_PUBLIC_API_URL": "https://thej.rraj.dev",
         "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_aGVhbHRoeS1zaGVwaGVyZC01NTI1LmNsZXJrLmFjY291bnRzLmRldiQ",
         "EXPO_PUBLIC_ENGINE": "mixer"
-      }
+      },
+      "channel": "preview"
     }
   }
 }

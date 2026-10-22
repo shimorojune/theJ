@@ -40,7 +40,13 @@
       "typedRoutes": true
     },
     "updates": {
-      "enabled": false
+      "enabled": true,
+      "url": "https://u.expo.dev/5eb57d7d-09a1-4206-b20d-76c244784990",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      }
     },
     "runtimeVersion": {
       "policy": "appVersion"
