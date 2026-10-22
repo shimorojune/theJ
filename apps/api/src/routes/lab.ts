@@ -1,4 +1,4 @@
-import { signAudioUrl, songLanguages } from "@thej/core";
+import { artistsIn, embedText, pickCandidates, signAudioUrl, songLanguages } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
@@ -38,6 +38,34 @@ export const lab = new Hono<AuthVars>()
             where languages @> '{hi}' and lang_guess @> '{en}' order by random() limit 15`),
     ]);
     return c.json({ pgvector, effective, tagged, guessOfTagged, sample });
+  })
+  // What the picker returns for words and languages (no session): /lab/pick?text=...&lang=hi,en
+  .get("/pick", async (c) => {
+    const text = c.req.query("text") ?? "dance party";
+    const languages = (c.req.query("lang") ?? "en,hi").split(",");
+    const moodEmbedding = await embedText(text);
+    const artists = await artistsIn(db, text);
+    const run = (tx: typeof db) =>
+      pickCandidates(tx, {
+        moodEmbedding,
+        energy: Number(c.req.query("energy") ?? 0.7),
+        valence: Number(c.req.query("valence") ?? 0.6),
+        languages,
+        exclude: [],
+        liked: [],
+        artists,
+        limit: 15,
+      });
+    const picks = await db.transaction((tx) => run(tx as unknown as typeof db));
+    return c.json({
+      artists,
+      picks: picks.map((p) => ({
+        title: p.title,
+        artist: p.artist,
+        langs: p.langs,
+        score: p.score,
+      })),
+    });
   })
   .get("/songs", async (c) => {
     const limit = Math.min(500, Number(c.req.query("limit") ?? 200) || 200);
