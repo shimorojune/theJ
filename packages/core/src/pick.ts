@@ -118,13 +118,14 @@ export async function artistsIn(db: Db, text: string): Promise<string[]> {
 }
 
 /**
- * A song's language: the LLM tag, else the guess from labels and script; Bhojpuri and
- * Haryanvi guesses win over a tag (the tagger files them under "hi").
+ * A song's language: the LLM tag; for untagged songs the language its labels or artist point to
+ * (song_langs), else the guess from title script. Bhojpuri and Haryanvi guesses win over a tag
+ * (the tagger files them under "hi").
  */
 export const songLanguages = sql.raw(`(case
   when s.lang_guess && '{bho,bgc}'::text[] then s.lang_guess
   when s.languages <> '{}'::text[] then s.languages
-  else s.lang_guess end)`);
+  else coalesce((select l.langs from song_langs l where l.song_id = s.id), s.lang_guess) end)`);
 
 /**
  * Nearest songs to the mood in the embedding space, in the session's languages, minus the

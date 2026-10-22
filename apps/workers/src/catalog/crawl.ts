@@ -130,7 +130,11 @@ async function report() {
 // Embedding is cheap and sessions need it, so it runs first (whatever earlier runs left behind),
 // after each crawl, and again after tags land. A redeploy mid-crawl then never leaves the
 // catalogue unusable.
-const embed = async () => log(`embedded ${await embedPending(log)} songs`);
+const embed = async () => {
+  log(`embedded ${await embedPending(log)} songs`);
+  // Untagged songs' languages from labels and artists, for the picker (drizzle/0012).
+  await db.execute(sql`select thej_refresh_song_langs()`);
+};
 if (what === "all") await embed();
 if (what === "deezer" || what === "all") await crawlDeezer();
 if (what === "all") await embed();
@@ -140,6 +144,7 @@ if (what === "tag" || what === "all") {
   if (process.env.OPENROUTER_API_KEY) {
     log(`tagged ${await tagUntagged(Infinity, log)} songs`);
     log(`re-embedded ${await embedPending(log)} tagged songs`);
+    await db.execute(sql`select thej_refresh_song_langs()`);
   } else log("OPENROUTER_API_KEY not set: skipping the tag pass");
 }
 await report();
