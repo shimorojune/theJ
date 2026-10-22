@@ -1,11 +1,31 @@
 {
-  "cli": { "version": ">= 25.0.0", "appVersionSource": "local" },
+  "cli": {
+    "version": ">= 25.0.0",
+    "appVersionSource": "local"
+  },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "android": { "buildType": "apk" }
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://thej.rraj.dev",
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_aGVhbHRoeS1zaGVwaGVyZC01NTI1LmNsZXJrLmFjY291bnRzLmRldiQ",
+        "EXPO_PUBLIC_ENGINE": "mixer"
+      }
     },
-    "preview": { "distribution": "internal", "android": { "buildType": "apk" } }
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://thej.rraj.dev",
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_aGVhbHRoeS1zaGVwaGVyZC01NTI1LmNsZXJrLmFjY291bnRzLmRldiQ",
+        "EXPO_PUBLIC_ENGINE": "mixer"
+      }
+    }
   }
 }
