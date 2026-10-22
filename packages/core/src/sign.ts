@@ -9,7 +9,7 @@ export function signAudioUrl(
   videoId: string,
   secret: string,
   ttlS = 6 * 3600,
-  route: "audio" | "preview" = "audio",
+  route: "audio" | "preview" | "stems" = "audio",
 ) {
   const exp = Math.floor(Date.now() / 1000) + ttlS;
   return `${base}/${route}/${videoId}?exp=${exp}&sig=${sig(videoId, exp, secret)}`;

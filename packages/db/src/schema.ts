@@ -254,6 +254,12 @@ export const audioCache = pgTable(
     previewOffsetS: real("preview_offset_s"),
     /** Normalised correlation of that match, 0 to 1. */
     previewMatch: real("preview_match"),
+    /**
+     * Where this song's stem windows start (s), once split (streamer/stems.py): the mix-in
+     * window (drums, other, rest) and the mix-out window (vocals, bass, rest). Null until then.
+     */
+    stemsInS: real("stems_in_s"),
+    stemsOutS: real("stems_out_s"),
     readyAt: timestamp("ready_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
     /** Warm-set songs survive the cleanup sweep. */

@@ -56,6 +56,18 @@ export const QueueTrack = z.object({
   previewUrl: z.string().url().nullable(),
   /** Where the preview sits inside the full audio; known once the full song is pulled. */
   previewOffsetS: z.number().nullable(),
+  /**
+   * Stems of the two mix windows for the DJ hand-over, once the server has split them: where
+   * each window starts in the song (s) and a signed URL per part. Null until then.
+   */
+  stems: z
+    .object({
+      inS: z.number(),
+      outS: z.number(),
+      in: z.object({ drums: z.string().url(), other: z.string().url(), rest: z.string().url() }),
+      out: z.object({ vocals: z.string().url(), bass: z.string().url(), rest: z.string().url() }),
+    })
+    .nullable(),
   energy: z.number().nullable(),
   valence: z.number().nullable(),
 });

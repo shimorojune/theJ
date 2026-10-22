@@ -4,12 +4,12 @@ import { previewUrlFor } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { QUEUES, STREAM_READY_CHANNEL, type StreamJob, type StreamReady } from "@thej/shared";
 import { Worker } from "bullmq";
-import { eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { Egress } from "../fetcher/egress";
 import { downloadAudio } from "../fetcher/ytdlp";
 import { db } from "../lib/db";
 import { connection } from "../lib/redis";
-import { analyse, previewOffset } from "./analyse";
+import { analyse, previewOffset, STEM_PARTS, splitStems } from "./analyse";
 import { youtubeIdFor } from "./resolve";
 
 /** Where pulled songs live until the sweep removes them. Shared with the api as a volume. */
@@ -42,6 +42,31 @@ async function previewFile(songId: string): Promise<string | null> {
   await writeFile(tmp, Buffer.from(await res.arrayBuffer()));
   await rename(tmp, path);
   return path;
+}
+
+/** Stem files of a song: `<dir>/stems/<id>.<part>.m4a` (shared with the api). */
+const stemPrefix = (songId: string) => join(DIR, "stems", songId.replace(/[^A-Za-z0-9_-]/g, "_"));
+
+/**
+ * Stems are split one song at a time after the song is ready, so they never hold up playback;
+ * a song mixes the classic way until its stems are there.
+ */
+let stemChain: Promise<unknown> = Promise.resolve();
+function queueStems(songId: string, path: string, a: Parameters<typeof splitStems>[2]) {
+  stemChain = stemChain.then(async () => {
+    const t0 = Date.now();
+    try {
+      await mkdir(join(DIR, "stems"), { recursive: true });
+      const { inS, outS } = await splitStems(path, stemPrefix(songId), a);
+      await db
+        .update(audioCache)
+        .set({ stemsInS: inS, stemsOutS: outS })
+        .where(eq(audioCache.songId, songId));
+      console.log(`stems ${songId} in ${Date.now() - t0} ms`);
+    } catch (err) {
+      console.error(`stems failed ${songId}: ${(err as Error).message}`);
+    }
+  });
 }
 
 const announce = (msg: StreamReady) =>
@@ -111,6 +136,7 @@ const worker = new Worker<StreamJob>(
         .where(eq(songs.id, songId));
       egress.reportJob();
       await announce({ songId, ok: true });
+      queueStems(songId, path, a);
       return {
         bytes: size,
         bpm: a.bpm,
@@ -147,6 +173,8 @@ async function sweep() {
   for (const row of old) {
     if (await isPinned(row.songId)) continue;
     await rm(row.path, { force: true });
+    for (const part of STEM_PARTS)
+      await rm(`${stemPrefix(row.songId)}.${part}.m4a`, { force: true });
     await db.delete(audioCache).where(eq(audioCache.songId, row.songId));
   }
   if (old.length) console.log(`swept ${old.length} files`);
@@ -181,6 +209,25 @@ async function reanalyse() {
   }
   if (rows.length) console.log(`reanalysed ${rows.length} songs`);
 }
-void reanalyse().catch((e) => console.error("reanalyse", e));
+/** Songs pulled before stems existed get theirs, behind any new pulls' stems. */
+async function backfillStems() {
+  const rows = await db
+    .select()
+    .from(audioCache)
+    .where(and(isNull(audioCache.stemsOutS), isNotNull(audioCache.mixOutS)));
+  for (const r of rows)
+    queueStems(r.songId, r.path, {
+      bpm: r.bpm ?? 0,
+      mixInS: r.mixInS ?? 0,
+      mixOutS: r.mixOutS ?? 0,
+      mixInBeatS: r.mixInBeatS,
+      mixOutBeatS: r.mixOutBeatS,
+    });
+  if (rows.length) console.log(`stems queued for ${rows.length} cached songs`);
+}
+void reanalyse()
+  .catch((e) => console.error("reanalyse", e))
+  .then(backfillStems)
+  .catch((e) => console.error("stems backfill", e));
 
 console.log(`streamer up (dir ${DIR}, egress ${egress.label}, keep ${KEEP_MIN} min)`);

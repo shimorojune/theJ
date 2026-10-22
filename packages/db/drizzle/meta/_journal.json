@@ -78,6 +78,13 @@
       "when": 1792680398382,
       "tag": "0010_covers",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792680699081,
+      "tag": "0011_small_iron_patriot",
+      "breakpoints": true
     }
   ]
 }

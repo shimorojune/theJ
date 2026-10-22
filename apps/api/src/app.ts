@@ -8,6 +8,7 @@ import { lab } from "./routes/lab";
 import { me } from "./routes/me";
 import { preview } from "./routes/preview";
 import { changed, sessions } from "./routes/sessions";
+import { stems } from "./routes/stems";
 
 export const app = new Hono()
   .use(logger())
@@ -29,6 +30,7 @@ export const app = new Hono()
   .route("/sessions", sessions)
   .route("/audio", audio)
   .route("/preview", preview)
+  .route("/stems", stems)
   .route("/lab", lab)
   .onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);

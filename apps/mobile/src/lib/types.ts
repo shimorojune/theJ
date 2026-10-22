@@ -19,6 +19,13 @@ export type Song = {
   previewUrl?: string | null;
   /** Where that preview sits inside the full audio, once the full song is pulled. */
   previewOffsetS?: number | null;
+  /** Stems of the two mix windows for the DJ hand-over, once the server has split them. */
+  stems?: {
+    inS: number;
+    outS: number;
+    in: { drums: string; other: string; rest: string };
+    out: { vocals: string; bass: string; rest: string };
+  } | null;
   energy: number | null;
   valence: number | null;
   tempo: number | null;

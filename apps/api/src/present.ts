@@ -25,6 +25,7 @@ export function toSong(
   | "audioUrl"
   | "previewUrl"
   | "previewOffsetS"
+  | "stems"
 > & { bpm: number | null } {
   return {
     songId: s.id,
@@ -37,6 +38,28 @@ export function toSong(
     bpm: s.tempo === null ? null : Math.round(s.tempo),
   };
 }
+
+const stemUrl = (songId: string, part: string) =>
+  signAudioUrl(
+    env.PUBLIC_API_URL,
+    `${songId}/${part}`,
+    env.AUDIO_URL_SIGNING_SECRET,
+    6 * 3600,
+    "stems",
+  );
+
+const stemUrls = (songId: string) => ({
+  in: {
+    drums: stemUrl(songId, "in-drums"),
+    other: stemUrl(songId, "in-other"),
+    rest: stemUrl(songId, "in-rest"),
+  },
+  out: {
+    vocals: stemUrl(songId, "out-vocals"),
+    bass: stemUrl(songId, "out-bass"),
+    rest: stemUrl(songId, "out-rest"),
+  },
+});
 
 export function toQueueTrack(q: QueuedSong): QueueTrack {
   return {
@@ -53,6 +76,10 @@ export function toQueueTrack(q: QueuedSong): QueueTrack {
       ? signAudioUrl(env.PUBLIC_API_URL, q.id, env.AUDIO_URL_SIGNING_SECRET, 6 * 3600, "preview")
       : null,
     previewOffsetS: q.previewOffsetS,
+    stems:
+      q.stemsInS != null && q.stemsOutS != null
+        ? { inS: q.stemsInS, outS: q.stemsOutS, ...stemUrls(q.id) }
+        : null,
   };
 }
 

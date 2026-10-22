@@ -17,6 +17,7 @@ export type Analysis = {
 
 const SCRIPT = fileURLToPath(new URL("./beats.py", import.meta.url));
 const PREVIEW_SCRIPT = fileURLToPath(new URL("./preview_offset.py", import.meta.url));
+const STEMS_SCRIPT = fileURLToPath(new URL("./stems.py", import.meta.url));
 
 /** Below this the preview may be a different recording or edit; the phone then mixes instead. */
 const MIN_PREVIEW_MATCH = 0.6;
@@ -38,4 +39,39 @@ export async function previewOffset(
   const out = await run("python3", [PREVIEW_SCRIPT, full, preview]);
   const r = JSON.parse(out.slice(out.indexOf("{"))) as { offsetS: number | null; match: number };
   return { offsetS: r.match >= MIN_PREVIEW_MATCH ? r.offsetS : null, match: r.match };
+}
+
+/** The stem parts the phone's hand-over uses, per window (see stems.py). */
+export const STEM_PARTS = [
+  "in-drums",
+  "in-other",
+  "in-rest",
+  "out-vocals",
+  "out-bass",
+  "out-rest",
+] as const;
+export type StemPart = (typeof STEM_PARTS)[number];
+
+/**
+ * Split the song's two mix windows into stems, written as `<prefix>.<part>.m4a`. The mix-in
+ * window runs from the mix-in beat for 28 beats (room for an 8% stretch); the mix-out window
+ * from 2 beats before the mix-out beat for 32 (room for a mix that starts a bar late).
+ */
+export async function splitStems(
+  path: string,
+  prefix: string,
+  a: Pick<Analysis, "bpm" | "mixInS" | "mixOutS" | "mixInBeatS" | "mixOutBeatS">,
+): Promise<{ inS: number; outS: number }> {
+  const beatIn = a.mixInBeatS || (a.bpm > 0 ? 60 / a.bpm : 0.5);
+  const beatOut = a.mixOutBeatS || (a.bpm > 0 ? 60 / a.bpm : 0.5);
+  const out = await run("python3", [
+    STEMS_SCRIPT,
+    path,
+    prefix,
+    String(a.mixInS),
+    String(28 * beatIn * 1.1),
+    String(a.mixOutS - 2 * beatOut),
+    String(32 * beatOut),
+  ]);
+  return JSON.parse(out.slice(out.lastIndexOf("{"))) as { inS: number; outS: number };
 }
