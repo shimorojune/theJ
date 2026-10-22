@@ -24,6 +24,8 @@ export type Candidate = {
   era: string | null;
   sourceCount: number;
   ready: boolean;
+  /** The song's language (tag, else guess); see songLanguages. */
+  langs: string[];
   /** 0 = perfect fit; lower is better. */
   score: number;
 };
@@ -44,23 +46,111 @@ export type PickContext = {
   currentKey?: { key: string | null; scale: string | null } | null;
   /** Prefer songs whose audio is already pulled (instant start). */
   preferReady?: boolean;
+  /** Artists asked for by name, lowercased: their songs join the pool and lead it. */
+  artists?: string[];
   limit?: number;
 };
+
+/** Hindi as the listener picked it ("Bollywood, indie, Punjabi") also covers Punjabi and Urdu. */
+export function allowedLanguages(languages: string[]): string[] {
+  return [...new Set(languages.flatMap((l) => (l === "hi" ? ["hi", "pa", "ur"] : [l])))];
+}
+
+/**
+ * The language the next pick should be in so the set keeps the listener's English/Hindi mix
+ * (`hiShare` is the Hindi share they chose). With one language, or none to balance, all of them.
+ */
+export function nextLanguages(
+  languages: string[],
+  hiShare: number,
+  recent: { hi: number; en: number },
+): string[] {
+  if (!(languages.includes("hi") && languages.includes("en"))) return languages;
+  const owed = hiShare * (recent.hi + recent.en + 1) - recent.hi;
+  return [owed >= 0.5 ? "hi" : "en"];
+}
+
+/** Count a picked song toward the English/Hindi mix. */
+export function countLanguage(recent: { hi: number; en: number }, langs: string[]) {
+  if (langs.some((l) => l === "hi" || l === "pa" || l === "ur")) recent.hi++;
+  else if (langs.includes("en")) recent.en++;
+}
+
+/**
+ * Artists named in the listener's words ("more from Justin Bieber"), lowercased: credited first
+ * artists with a few songs whose whole name appears as words in the text.
+ */
+export async function artistsIn(db: Db, text: string): Promise<string[]> {
+  const words = ` ${text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()} `;
+  if (words.trim().length < 4) return [];
+  const rows = await db.execute<{ a: string }>(sql`
+    select a from (
+      select lower(trim(split_part(artist, ',', 1))) as a, count(*) as n
+      from songs where not junk group by 1
+    ) t
+    where length(a) >= 4 and n >= 3
+      and position(' ' || a || ' ' in ${words}) > 0
+      and a not in ('love', 'happy', 'chill', 'party', 'dance', 'music', 'songs', 'party', 'night', 'summer', 'heart', 'dream', 'bollywood', 'punjabi', 'hindi', 'english')
+    order by length(a) desc
+    limit 3`);
+  return (rows as unknown as { a: string }[]).map((r) => r.a);
+}
+
+/**
+ * A song's language: the LLM tag, else the guess from labels and script; Bhojpuri and
+ * Haryanvi guesses win over a tag (the tagger files them under "hi").
+ */
+export const songLanguages = sql.raw(`(case
+  when s.lang_guess && '{bho,bgc}'::text[] then s.lang_guess
+  when s.languages <> '{}'::text[] then s.languages
+  else s.lang_guess end)`);
 
 /**
  * Nearest songs to the mood in the embedding space, in the session's languages, minus the
  * exclusions, scored on meaning, energy/valence distance, tempo mixability, likes and popularity.
  */
 export async function pickCandidates(db: Db, ctx: PickContext): Promise<Candidate[]> {
+  const rows = await candidates(db, ctx, false);
+  // Too few songs with a known language: let unknown ones in rather than run dry.
+  return rows.length >= Math.min(5, ctx.limit ?? 30) ? rows : candidates(db, ctx, true);
+}
+
+async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
   const v = vectorLiteral(ctx.moodEmbedding);
   const tempo = ctx.currentTempo ?? null;
   const readyBonus = ctx.preferReady ? 0.02 : 0;
+  const langs = textArray(allowedLanguages(ctx.languages));
+  const artists = textArray((ctx.artists ?? []).map((a) => `%${a}%`));
   const rows = await db.execute<Candidate>(sql`
-    with scored as (
+    with pool as (
+      (select s.id from songs s
+       where s.embedding is not null
+         and s.unavailable_at is null
+         and not s.junk
+         and (${songLanguages} && ${langs} or (${unknownLanguage} and ${songLanguages} = '{}'))
+         and not (s.id = any(${textArray(ctx.exclude)}))
+       order by s.embedding <=> ${v}::vector
+       limit 200)
+      union
+      -- Asked-for artists in any language: the listener named them.
+      (select s.id from songs s
+       where cardinality(${artists}) > 0
+         and lower(s.artist) like any(${artists})
+         and s.unavailable_at is null
+         and not s.junk
+         and not (s.id = any(${textArray(ctx.exclude)}))
+       order by s.source_count desc
+       limit 100)
+    ),
+    scored as (
       select s.id, s.title, s.artist, s.energy, s.valence, s.tempo, s.key, s.scale, s.era,
-             s.source_count as "sourceCount",
+             s.source_count as "sourceCount", ${songLanguages} as langs,
              (c.song_id is not null) as ready,
-             (s.embedding <=> ${v}::vector) as sem,
+             coalesce(s.embedding <=> ${v}::vector, 1) as sem,
+             (cardinality(${artists}) > 0 and lower(s.artist) like any(${artists}))::int as asked,
              sqrt(power(coalesce(s.energy, 0.5) - ${ctx.energy}, 2) + power(coalesce(s.valence, 0.5) - ${ctx.valence}, 2)) as vibe,
              case
                when ${tempo}::real is null or s.tempo is null or s.tempo = 0 then 0.5
@@ -68,16 +158,10 @@ export async function pickCandidates(db: Db, ctx: PickContext): Promise<Candidat
                when abs(s.tempo / ${tempo}::real - 0.5) <= 0.03 or abs(s.tempo / ${tempo}::real - 2) <= 0.12 then 0.15
                else 1 end as mix,
              case when s.id = any(${textArray(ctx.liked)}) then 1 else 0 end as liked
-      from songs s
+      from pool join songs s using (id)
       left join audio_cache c on c.song_id = s.id
-      where s.embedding is not null
-        and s.unavailable_at is null
-        and (s.languages && ${textArray(ctx.languages)} or s.languages = '{}')
-        and not (s.id = any(${textArray(ctx.exclude)}))
-      order by s.embedding <=> ${v}::vector
-      limit 200
     )
-    select *, (0.45 * sem + 0.40 * vibe + 0.15 * mix - 0.08 * liked
+    select *, (0.45 * sem + 0.40 * vibe + 0.15 * mix - 0.08 * liked - 0.5 * asked
                - 0.03 * least(ln("sourceCount" + 1), 3) - ${readyBonus}::real * ready::int) as score
     from scored
     order by score
@@ -102,10 +186,11 @@ export function camelot(
   key: string | null,
   scale: string | null,
 ): { n: number; minor: boolean } | null {
-  const m = key?.trim().match(/^([A-Ga-g])([#b♯♭]?)/);
-  if (!m || !scale) return null;
+  const [, note = "", accidental = ""] = key?.trim().match(/^([A-Ga-g])([#b♯♭]?)/) ?? [];
+  const base = PITCH[note.toUpperCase()];
+  if (base === undefined || !scale) return null;
   const minor = /^min/i.test(scale);
-  let pc = PITCH[m[1].toUpperCase()] + (m[2] === "#" || m[2] === "♯" ? 1 : m[2] ? -1 : 0);
+  let pc = base + (accidental === "#" || accidental === "♯" ? 1 : accidental ? -1 : 0);
   if (minor) pc += 3; // the relative major shares the number
   pc = ((pc % 12) + 12) % 12;
   return { n: ((((7 * pc) % 12) + 7) % 12) + 1, minor };

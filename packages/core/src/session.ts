@@ -3,7 +3,14 @@ import { audioCache, type Db, playEvents, queueItems, sessions, songs, users } f
 import { applyButton, type Button, stepToward, type Vibe } from "@thej/shared";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { embedText } from "./embed";
-import { choose, pickCandidates } from "./pick";
+import {
+  artistsIn,
+  choose,
+  countLanguage,
+  nextLanguages,
+  pickCandidates,
+  songLanguages,
+} from "./pick";
 import { mayHavePreview } from "./preview";
 
 /** The phone holds the current song plus the next 2. */
@@ -69,9 +76,11 @@ export async function startSession(
   const goal = opts.vibe ?? { energy: 0.5, valence: 0.5 };
   const languages = opts.languages ?? user?.languages ?? ["en", "hi"];
   const moodText = opts.moodText?.trim() || vibeWords(goal);
+  // Hindi-only listeners get a Hindi-leaning search; mixed ones are balanced per pick instead.
   const moodEmbedding = await embedText(
-    `${moodText}${languages.includes("hi") ? " bollywood hindi" : ""}`,
+    `${moodText}${languages.length === 1 && languages[0] === "hi" ? " bollywood hindi" : ""}`,
   );
+  const artists = opts.moodText ? await artistsIn(db, opts.moodText) : [];
   const id = randomUUID();
   await db.insert(sessions).values({
     id,
@@ -81,6 +90,7 @@ export async function startSession(
     filters: { languages },
     moodText,
     moodEmbedding,
+    artists,
   });
   return db.transaction(async (tx) => fill(tx, await lock(tx, id)));
 }
@@ -169,16 +179,19 @@ export async function setMood(
   moodText: string,
   vibe?: Vibe,
 ): Promise<QueueState> {
-  const moodEmbedding = await embedText(moodText);
+  const [moodEmbedding, artists] = await Promise.all([
+    embedText(moodText),
+    artistsIn(db, moodText),
+  ]);
   return db.transaction(async (tx) => {
     const s = await lock(tx, sessionId);
     const goal = vibe ?? (s.goal as Vibe);
     await tx
       .update(sessions)
-      .set({ moodText, moodEmbedding, goal })
+      .set({ moodText, moodEmbedding, goal, artists })
       .where(eq(sessions.id, sessionId));
     await dropAfterCurrent(tx, sessionId);
-    return fill(tx, { ...s, moodText, moodEmbedding, goal });
+    return fill(tx, { ...s, moodText, moodEmbedding, goal, artists });
   });
 }
 
@@ -211,18 +224,24 @@ export async function previewPlan(db: Db, sessionId: string, n = 10): Promise<So
     let target = s.target as Vibe;
     let tempo = ctx.currentTempo;
     let key = ctx.currentKey;
+    const recent = { ...ctx.recent };
     for (let i = 0; i < n; i++) {
       target = stepToward(target, s.goal as Vibe);
-      const [best] = await pickCandidates(tx as unknown as Db, {
-        ...ctx,
-        energy: target.energy,
-        valence: target.valence,
-        currentTempo: tempo,
-        currentKey: key,
-        exclude: [...ctx.exclude, ...out],
-        limit: 1,
-      });
+      const pick = (languages: string[]) =>
+        pickCandidates(tx as unknown as Db, {
+          ...ctx,
+          languages,
+          energy: target.energy,
+          valence: target.valence,
+          currentTempo: tempo,
+          currentKey: key,
+          exclude: [...ctx.exclude, ...out],
+          limit: 1,
+        });
+      let [best] = await pick(ctx.pickLanguages(recent));
+      if (!best) [best] = await pick(ctx.languages);
       if (!best) break;
+      countLanguage(recent, best.langs);
       out.push(best.id);
       tempo = best.tempo;
       key = best;
@@ -330,23 +349,29 @@ async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): P
     let target = s.target as Vibe;
     let tempo = ctx.currentTempo;
     let key = ctx.currentKey;
+    const recent = { ...ctx.recent };
     const picked: string[] = [];
     for (let i = 0; i < missing; i++) {
       // The first pick is what plays next; prefer songs whose audio is already here.
       const preferReady = opts.preferReady || (items.length === 0 && i === 0);
-      const cands = await pickCandidates(tx as unknown as Db, {
-        ...ctx,
-        energy: target.energy,
-        valence: target.valence,
-        currentTempo: tempo,
-        currentKey: key,
-        exclude: [...ctx.exclude, ...picked],
-        preferReady,
-        limit: 20,
-      });
-      // The opener draws from a wide band: the same mood should not open the same way twice.
-      const best = choose(cands, { jitter: preferReady ? 0.1 : 0.03, preferReady });
+      const pick = async (languages: string[]) => {
+        const cands = await pickCandidates(tx as unknown as Db, {
+          ...ctx,
+          languages,
+          energy: target.energy,
+          valence: target.valence,
+          currentTempo: tempo,
+          currentKey: key,
+          exclude: [...ctx.exclude, ...picked],
+          preferReady,
+          limit: 20,
+        });
+        // The opener draws from a wide band: the same mood should not open the same way twice.
+        return choose(cands, { jitter: preferReady ? 0.1 : 0.03, preferReady });
+      };
+      const best = (await pick(ctx.pickLanguages(recent))) ?? (await pick(ctx.languages));
       if (!best) break;
+      countLanguage(recent, best.langs);
       picked.push(best.id);
       position++;
       await tx
@@ -427,7 +452,7 @@ async function context(tx: Tx, s: Session) {
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
   const dayAgo = new Date(Date.now() - 86_400_000);
 
-  const [sessionItems, heard, liked, last] = await Promise.all([
+  const [sessionItems, heard, liked, last, recentLangs] = await Promise.all([
     // Queued in any of this user's moods today, played or not: a restarted mood opens differently.
     tx
       .select({ songId: queueItems.songId })
@@ -454,7 +479,15 @@ async function context(tx: Tx, s: Session) {
     likedIds(tx, s.userId),
     // New picks follow the last committed song, not the one playing now.
     committedItems(tx, s.id).then((items) => items.at(-1)),
+    // Languages of this mood's last dozen songs, to keep the listener's English/Hindi mix.
+    tx.execute<{ langs: string[] }>(sql`
+      select ${songLanguages} as langs from queue_items q join songs s on s.id = q.song_id
+      where q.session_id = ${s.id} order by q.position desc limit 12`),
   ]);
+  const recent = { hi: 0, en: 0 };
+  for (const r of recentLangs as unknown as { langs: string[] }[]) countLanguage(recent, r.langs);
+  const hiShare = user?.mixRatio ?? 0.5;
+  const artists = s.artists ?? [];
 
   let currentTempo: number | null = null;
   let currentKey: { key: string | null; scale: string | null } | null = null;
@@ -488,5 +521,10 @@ async function context(tx: Tx, s: Session) {
     liked: [...liked],
     currentTempo,
     currentKey,
+    artists,
+    recent,
+    /** One language per pick to hold the mix; all of them while artists are asked for by name. */
+    pickLanguages: (r: { hi: number; en: number }) =>
+      artists.length ? languages : nextLanguages(languages, hiShare, r),
   };
 }

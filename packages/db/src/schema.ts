@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   bigint,
   boolean,
@@ -88,6 +89,8 @@ export const sessions = pgTable("sessions", {
   /** The mood in words ("sad nostalgic bollywood"); its embedding anchors the candidate search. */
   moodText: text("mood_text"),
   moodEmbedding: vector384("mood_embedding"),
+  /** Artists the listener asked for by name ("more from Justin Bieber"); their songs lead. */
+  artists: text("artists").array().notNull().default([]),
   startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
   endedAt: timestamp("ended_at", { withTimezone: true }),
 });
@@ -161,6 +164,17 @@ export const songs = pgTable(
     labels: text("labels").array().notNull().default([]),
     /** Era bucket from the LLM or release year: "1990s", "2010s"… */
     era: text("era"),
+    /**
+     * Language guessed from labels and script until the tagger reaches the song (see
+     * thej_guess_languages in drizzle/0009). Bhojpuri and Haryanvi win over the tagger, which
+     * files them under "hi".
+     */
+    langGuess: text("lang_guess")
+      .array()
+      .notNull()
+      .generatedAlwaysAs(sql`thej_guess_languages(title, artist, labels)`),
+    /** A video upload, lofi/slowed re-edit, mashup or jukebox, not a song: never picked. */
+    junk: boolean("junk").notNull().generatedAlwaysAs(sql`thej_is_junk(title)`),
     /** How many playlists this song appeared in; a cheap popularity signal. */
     sourceCount: integer("source_count").notNull().default(1),
     taggedAt: timestamp("tagged_at", { withTimezone: true }),
