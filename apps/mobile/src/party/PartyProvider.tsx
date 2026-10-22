@@ -109,7 +109,10 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     [api, apply],
   );
 
-  // One engine for the provider's life; it reports status and song changes.
+  // One engine for the provider's life; it reports status and song changes. `send` is read
+  // through a ref so a new api client (Clerk hands out a new getToken) never rebuilds the engine.
+  const sendRef = useRef(send);
+  sendRef.current = send;
   useEffect(() => {
     let alive = true;
     let offStatus = () => {};
@@ -119,8 +122,8 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       engine.current = e;
       offStatus = e.onStatus(setStatus);
       offTrack = e.onTrackChange(({ from, to, reason }) => {
-        if (to) void send(to, "start").catch(() => {});
-        if (from) void send(from, reason).catch((err) => setError(String(err)));
+        if (to) void sendRef.current(to, "start").catch(() => {});
+        if (from) void sendRef.current(from, reason).catch((err) => setError(String(err)));
       });
     });
     return () => {
@@ -130,7 +133,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       engine.current?.destroy();
       engine.current = null;
     };
-  }, [send]);
+  }, []);
 
   // Live queue changes from the server (a pad move from another phone, audio becoming ready).
   useEffect(() => {

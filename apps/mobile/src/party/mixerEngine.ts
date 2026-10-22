@@ -54,9 +54,6 @@ export class MixerEngine implements Engine {
     AudioManager.setAudioSessionOptions({ iosCategory: "playback", iosMode: "default" });
     void AudioManager.setAudioSessionActivity(true);
     void AudioManager.requestNotificationPermissions().catch(() => {});
-    void PlaybackNotificationManager.enableControl("nextTrack", true);
-    void PlaybackNotificationManager.enableControl("play", true);
-    void PlaybackNotificationManager.enableControl("pause", true);
     const subs = [
       PlaybackNotificationManager.addEventListener("playbackNotificationPlay", () => this.play()),
       PlaybackNotificationManager.addEventListener("playbackNotificationPause", () => this.pause()),
@@ -324,7 +321,6 @@ export class MixerEngine implements Engine {
     this.cancelNext();
     this.current = null;
     this.queue = [];
-    void PlaybackNotificationManager.hide();
   }
   destroy() {
     clearInterval(this.tick);
@@ -335,16 +331,26 @@ export class MixerEngine implements Engine {
 
   // --- reporting ---
 
+  private notified = false;
   private announce(song: Song | undefined) {
     if (!song) return;
-    void PlaybackNotificationManager.show({
-      title: song.title,
-      artist: song.artist,
-      artwork: song.thumbUrl,
-      duration: this.current?.buffer.duration ?? song.durationS,
-      elapsedTime: this.current ? this.position(this.current) : 0,
-      state: this.paused ? "paused" : "playing",
-    });
+    void (async () => {
+      await PlaybackNotificationManager.show({
+        title: song.title,
+        artist: song.artist,
+        artwork: song.thumbUrl,
+        duration: this.current?.buffer.duration ?? song.durationS,
+        elapsedTime: this.current ? this.position(this.current) : 0,
+        state: this.paused ? "paused" : "playing",
+      });
+      if (!this.notified) {
+        // Controls can only be enabled once a notification exists.
+        this.notified = true;
+        for (const c of ["play", "pause", "nextTrack"] as const) {
+          await PlaybackNotificationManager.enableControl(c, true);
+        }
+      }
+    })().catch(() => {});
   }
 
   private emitStatus() {
