@@ -8,7 +8,7 @@ import { fmtTime } from "../src/lib/types";
 import { useNowPlaying, useParty } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
 import { IconButton } from "../src/ui/kit";
-import { VibeCard } from "../src/ui/VibeCard";
+import { MoodPad } from "../src/ui/MoodPad";
 
 export default function Player() {
   const {
@@ -22,7 +22,7 @@ export default function Player() {
     repeat,
     toggleRepeat,
     toggleLike,
-    press,
+    setVibe,
     error,
   } = useParty();
   const { now, next } = useNowPlaying();
@@ -167,7 +167,7 @@ export default function Player() {
           ) : null}
 
           <View style={{ marginTop: 10 }}>
-            <VibeCard queue={queue} onPress={(b, n) => void press(b, n)} />
+            <MoodPad queue={queue} onChange={(v, n) => void setVibe(v, n)} />
           </View>
         </ScrollView>
       </SafeAreaView>

@@ -31,6 +31,8 @@ type Party = {
   error: string | null;
   start: (languages: ("en" | "hi")[], vibe: Vibe) => Promise<void>;
   press: (button: Button, now: boolean) => Promise<void>;
+  /** The mood pad: an absolute goal. */
+  setVibe: (vibe: Vibe, now: boolean) => Promise<void>;
   skip: () => void;
   /** Jump to the next song because the user chose it (not a dislike). */
   jumpNext: () => void;
@@ -272,6 +274,18 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     [api, sessionId, apply],
   );
 
+  const setVibe = useCallback(
+    async (vibe: Vibe, now: boolean) => {
+      if (!sessionId) return;
+      const res = await api.sessions[":id"].control.$post({
+        param: { id: sessionId },
+        json: { kind: "pad", vibe, now },
+      });
+      apply(await ok<Queue>(res));
+    },
+    [api, sessionId, apply],
+  );
+
   const skip = useCallback(() => {
     if (playlist.currentIndex >= loaded.current.length - 1) return;
     reason.current = "skip";
@@ -338,6 +352,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         error,
         start,
         press,
+        setVibe,
         skip,
         jumpNext,
         togglePlay,
