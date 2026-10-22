@@ -75,7 +75,7 @@ services:
       HOME_PROXY: socks5h://deejay:${PROXY_PASS:?set PROXY_PASS}@${HOME_PROXY_IP:?set HOME_PROXY_IP}:1080
       FALLBACK_PROXY: ${FALLBACK_PROXY:-}
       STREAM_CONCURRENCY: "2"
-      STREAM_KEEP_MIN: "45"
+      STREAM_KEEP_MIN: "2880"
     volumes:
       - stream-data:/data/stream
     depends_on:
