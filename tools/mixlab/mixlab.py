@@ -297,7 +297,84 @@ def render(a, b, pre=16.0, post=24.0):
     cut_b = ramp(n, [(0, 1), (swap, 1), (swap + beat, 0), (pre + total, 0)])
     played_a = (deck_a * (1 - cut_a) + low_shelf(deck_a, BASS_CUT_DB) * cut_a) * ga
     played_b = (deck_b * (1 - cut_b) + low_shelf(deck_b, BASS_CUT_DB) * cut_b) * gb
-    return deck_a, deck_b, played_a + played_b, p, pre
+    return deck_a, deck_b, (played_a + played_b) * headroom(n, p, pre, total), p, pre
+
+
+# Two mastered songs summed clip; the phone dips its master by this much while both play.
+MIX_HEADROOM = 0.71  # -3 dB
+
+
+def headroom(n, p, pre, total):
+    """Master gain over the mix: down to MIX_HEADROOM across the overlap, back after it."""
+    beat = p["beat"]
+    end = pre + p["in"] + p["out"]
+    return ramp(n, [(0, 1), (pre, 1), (pre + 2 * beat, MIX_HEADROOM), (end, MIX_HEADROOM), (end + 4 * beat, 1), (pre + total, 1)])
+
+
+_DEMUCS = None
+
+
+def separate(x):
+    """Stems of stereo audio at SR: dict drums/bass/other/vocals (htdemucs, CPU)."""
+    global _DEMUCS
+    import torch
+    from demucs.apply import apply_model
+    from demucs.pretrained import get_model
+
+    if _DEMUCS is None:
+        _DEMUCS = get_model("htdemucs")
+        _DEMUCS.eval()
+    with torch.no_grad():
+        out = apply_model(_DEMUCS, torch.from_numpy(np.ascontiguousarray(x))[None], device="cpu", shifts=0, overlap=0.1, progress=False)[0]
+    return {name: out[i].numpy().astype(np.float32) for i, name in enumerate(_DEMUCS.sources)}
+
+
+def render_stems(a, b, pre=16.0, post=24.0):
+    """The same hand-over a DJ does with stems, on the same beat grid as render().
+
+    Bars counted from the mix point (4 beats each):
+      bars 1-2   B's drums ride in under A
+      bars 3-4   A's vocals fade out (two vocals never overlap); B's music comes in
+      bar 5      bass swap on the downbeat: A's bass out, B's bass in; B's vocals enter
+      bars 5-6   A's drums and music fade out
+    """
+    p = plan(a, b)
+    xa, xb = load(a), load(b)
+    a0 = int((p["a0"] - pre) * SR)
+    a_part = xa[:, max(0, a0) : int((p["a0"] + p["in"] + p["out"] + 0.5) * SR)]
+    if a0 < 0:
+        a_part = np.pad(a_part, ((0, 0), (-a0, 0)))
+    total = p["in"] + p["out"] + post
+    b_src = xb[:, int(p["b0"] * SR) : int((p["b0"] + total * p["rate"] + 1) * SR)]
+    b_part = stretch(b_src, p["rate"])
+    sa, sb = separate(a_part), separate(b_part)
+
+    n = int((pre + total) * SR)
+    start = int(pre * SR)
+
+    def place(x, at):
+        y = np.zeros((2, n), np.float32)
+        m = min(n - at, x.shape[1])
+        y[:, at : at + m] = x[:, :m]
+        return y
+
+    A = {k: place(v, 0) for k, v in sa.items()}
+    B = {k: place(v, start) for k, v in sb.items()}
+    beat = p["beat"]
+    t = lambda beats: pre + beats * beat  # noqa: E731
+    end_t = pre + total
+    g = lambda pts: ramp(n, [(0, pts[0][1])] + pts + [(end_t, pts[-1][1])])  # noqa: E731
+    mix = (
+        A["vocals"] * g([(t(8), 1), (t(14), 0)])
+        + A["other"] * g([(t(16), 1), (t(24), 0)])
+        + A["drums"] * g([(t(16), 1), (t(24), 0)])
+        + A["bass"] * g([(t(16) - 0.01, 1), (t(16), 0)])
+        + B["drums"] * g([(t(0), 0), (t(8), 1)])
+        + B["other"] * g([(t(8), 0), (t(16), 1)])
+        + B["bass"] * g([(t(16) - 0.01, 0), (t(16), 1)])
+        + B["vocals"] * g([(t(16) - 0.01, 0), (t(16), 1)])
+    )
+    return mix * headroom(n, p, pre, total), p, pre
 
 
 def score(a, b, deck_a, deck_b, p, pre):
@@ -352,6 +429,7 @@ def main():
     r = sub.add_parser("render")
     r.add_argument("a")
     r.add_argument("b")
+    r.add_argument("--stems", action="store_true", help="also render the stem hand-over")
     bn = sub.add_parser("bench")
     bn.add_argument("--n", type=int, default=40)
     bn.add_argument("--seed", type=int, default=7)
@@ -371,6 +449,9 @@ def main():
         deck_a, deck_b, mix, p, pre = render(a, b)
         write_wav(OUT / f"{safe(a['songId'])}__{safe(b['songId'])}.wav", mix)
         print(json.dumps(score(a, b, deck_a, deck_b, p, pre)))
+        if args.stems:
+            smix, _, _ = render_stems(a, b)
+            write_wav(OUT / f"{safe(a['songId'])}__{safe(b['songId'])}.stems.wav", smix)
         return
     ids = list(lib)
     random.Random(args.seed).shuffle(ids)

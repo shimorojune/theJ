@@ -22,6 +22,8 @@ const SKIP = { in: 2, out: 2 };
 /** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
 const NOW = { in: 8, out: 4 };
 const MAX_TEMPO_STRETCH = 0.08;
+/** Two mastered songs summed clip; the master dips this far (-3 dB) while both play. */
+const MIX_HEADROOM = 0.71;
 /** The bass shelf each deck has: cut while a song is coming in, open once it owns the floor. */
 const BASS_HZ = 180;
 const BASS_CUT_DB = -18;
@@ -479,6 +481,17 @@ export class MixerEngine implements Engine {
     const outS = Math.min(8, plan.out * beat);
     const swap = when + inS;
     const end = swap + outS;
+
+    if (cur) {
+      // Headroom while both decks play, eased so the dip itself is not heard.
+      const g = this.master.gain;
+      const from = g.value;
+      g.cancelScheduledValues(when);
+      g.setValueAtTime(from, when);
+      g.linearRampToValueAtTime(MIX_HEADROOM, when + 2 * beat);
+      g.setValueAtTime(MIX_HEADROOM, end);
+      g.linearRampToValueAtTime(1, end + 4 * beat);
+    }
 
     deck.filter.gain.setValueAtTime(BASS_CUT_DB, when);
     deck.filter.gain.linearRampToValueAtTime(0, swap + beat);
