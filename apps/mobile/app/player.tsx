@@ -3,7 +3,7 @@ import Slider from "@react-native-community/slider";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { fmtTime } from "../src/lib/types";
@@ -28,6 +28,7 @@ export default function Player() {
     label,
     starting,
     error,
+    retry,
   } = useParty();
   const { now, next } = useNowPlaying();
   const header = (
@@ -80,7 +81,22 @@ export default function Player() {
                       : "Pick a mood on Home"}
                 </Text>
               </View>
-              {error ? <Text style={[st.artist, { color: "#F0A868" }]}>{error}</Text> : null}
+              {starting ? <SlowHint /> : null}
+              {error && !starting && !first ? (
+                <View style={{ gap: 12, marginTop: 6 }}>
+                  <Text style={[st.artist, { color: "#F0A868" }]}>
+                    Couldn't start this mood. {error}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPressIn={tap}
+                    onPress={retry}
+                    style={({ pressed }) => [st.retry, pressed && pressedStyle]}
+                  >
+                    <Text style={st.retryText}>Try again</Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           </View>
         </SafeAreaView>
@@ -195,6 +211,20 @@ export default function Player() {
   );
 }
 
+/** After a few seconds of picking, say why it's taking a while. */
+function SlowHint() {
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), 6000);
+    return () => clearTimeout(t);
+  }, []);
+  return slow ? (
+    <Text style={[st.time, { marginTop: 4 }]}>
+      Still picking. The server is slow right now; the music starts as soon as it answers.
+    </Text>
+  ) : null;
+}
+
 /**
  * The seek bar and times: they follow the playhead on their own, and hold still while the
  * thumb is being dragged so it doesn't jump back under the finger.
@@ -283,6 +313,15 @@ const st = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
+  retry: {
+    alignSelf: "flex-start",
+    height: 44,
+    paddingHorizontal: 22,
+    borderRadius: 22,
+    backgroundColor: c.fg,
+    justifyContent: "center",
+  },
+  retryText: { color: c.bg, fontSize: 15, fontWeight: "600" },
   nextArt: { width: 48, height: 48, borderRadius: 4 },
   upNext: { color: c.muted, fontSize: 11, letterSpacing: 0.7 },
   nextTitle: { color: c.fg, fontSize: 15, fontWeight: "500" },

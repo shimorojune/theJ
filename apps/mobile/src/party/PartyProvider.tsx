@@ -19,6 +19,15 @@ import type { Queue, Song } from "../lib/types";
 import type { Engine, EngineStatus } from "./engine";
 
 const SESSION_KEY = "thej.session";
+/** A mood start that hasn't answered by now is reported, with a retry, instead of spinning. */
+const START_TIMEOUT_MS = 75_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error("The DJ didn't answer in time.")), ms);
+    p.then(resolve, reject).finally(() => clearTimeout(t));
+  });
+}
 const LABEL_KEY = "thej.label";
 
 /** What a mood start needs: a name to show, a starting vibe, and words for the search. */
@@ -54,6 +63,8 @@ type Party = {
   /** The name of the mood playing, for the player header. */
   label: string | null;
   start: (mood: MoodStart) => Promise<void>;
+  /** Start the last mood again (after a failed start). */
+  retry: () => void;
   press: (button: Button, now: boolean) => Promise<void>;
   skip: () => void;
   /** Jump to the next song because the user chose it (not a dislike). */
@@ -270,8 +281,11 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     })().catch(() => {});
   }, [isSignedIn, api, apply]);
 
+  const lastMood = useRef<MoodStart | null>(null);
   const start = useCallback(
-    async ({ label, vibe, moodText, languages }: MoodStart) => {
+    async (mood: MoodStart) => {
+      const { label, vibe, moodText, languages } = mood;
+      lastMood.current = mood;
       setStarting(true);
       setError(null);
       setLabel(label);
@@ -279,15 +293,16 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       sessionRef.current = undefined;
       try {
         engine.current?.clear();
-        const q = await ok<Queue>(
-          await api.sessions.$post({ json: { languages, vibe, moodText } }),
+        const q = await withTimeout(
+          api.sessions.$post({ json: { languages, vibe, moodText } }).then((r) => ok<Queue>(r)),
+          START_TIMEOUT_MS,
         );
         await SecureStore.setItemAsync(SESSION_KEY, q.sessionId);
         await SecureStore.setItemAsync(LABEL_KEY, label);
         sessionRef.current = q.sessionId;
         apply(q);
       } catch (e) {
-        setError(String(e));
+        setError(e instanceof Error ? e.message : String(e));
         throw e;
       } finally {
         setStarting(false);
@@ -295,6 +310,10 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     },
     [api, apply],
   );
+
+  const retry = useCallback(() => {
+    if (lastMood.current) void start(lastMood.current).catch(() => {});
+  }, [start]);
 
   const control = useCallback(
     async (json: { kind: "button"; button: Button; now: boolean }) => {
@@ -361,6 +380,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       error,
       label,
       start,
+      retry,
       press,
       skip,
       jumpNext,
@@ -381,6 +401,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       error,
       label,
       start,
+      retry,
       press,
       skip,
       jumpNext,
