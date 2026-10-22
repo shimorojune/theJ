@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
@@ -8,7 +9,20 @@ import { changed, sessions } from "./routes/sessions";
 
 export const app = new Hono()
   .use(logger())
-  .get("/health", (c) => c.json({ ok: true }))
+  // Catalog counts too, so a deploy can be checked from outside without a login.
+  .get("/health", async (c) => {
+    const [row] = await db.execute<{
+      songs: number;
+      embedded: number;
+      tagged: number;
+      cached: number;
+    }>(sql`
+      select (select count(*)::int from songs) as songs,
+             (select count(*)::int from songs where embedding is not null) as embedded,
+             (select count(*)::int from songs where tagged_at is not null) as tagged,
+             (select count(*)::int from audio_cache) as cached`);
+    return c.json({ ok: true, catalog: row });
+  })
   .route("/me", me)
   .route("/sessions", sessions)
   .route("/audio", audio)
