@@ -67,7 +67,7 @@ export async function pickCandidates(db: Db, ctx: PickContext): Promise<Candidat
       left join audio_cache c on c.song_id = s.id
       where s.embedding is not null
         and s.unavailable_at is null
-        and s.languages && ${textArray(ctx.languages)}
+        and (s.languages && ${textArray(ctx.languages)} or s.languages = '{}')
         and not (s.id = any(${textArray(ctx.exclude)}))
       order by s.embedding <=> ${v}::vector
       limit 200
