@@ -96,10 +96,7 @@ export async function artistsIn(db: Db, text: string): Promise<string[]> {
   // Only the closest matches: "justin beiber" is Bieber, not every Justin.
   const rows = await db.execute<{ a: string }>(sql`
     select a from (
-    select a, m.d, min(m.d) over () as best from (
-      select lower(trim(split_part(artist, ',', 1))) as a, count(*) as n
-      from songs where not junk group by 1
-    ) t
+    select a, m.d, min(m.d) over () as best from artist_names t
     cross join lateral (
       -- A first name alone ("arijit") ranks after any spelling of a full name.
       select min(case when length(g) >= 5 and a like g || ' %' then 2.5 else levenshtein(a, g) end) as d
@@ -145,9 +142,12 @@ async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
   const artists = textArray((ctx.artists ?? []).map((a) => `%${a}%`));
   // An HNSW scan hands back its first ef_search (40) neighbours and only then filters, so a
   // language or exclusion filter could leave nothing. Keep scanning until the limit is met
-  // (pgvector 0.8 iterative scan); set_config is local to the surrounding transaction.
+  // (pgvector 0.8 iterative scan), but no further than 4000 rows: past that a rare language
+  // would cost seconds, and pickCandidates relaxes instead. Local to the transaction.
   await db.execute(
-    sql`select set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', '200', true)`,
+    sql`select set_config('hnsw.iterative_scan', 'relaxed_order', true),
+               set_config('hnsw.ef_search', '100', true),
+               set_config('hnsw.max_scan_tuples', '4000', true)`,
   );
   const rows = await db.execute<Candidate>(sql`
     with pool as (
@@ -155,7 +155,7 @@ async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
        where s.embedding is not null
          and s.unavailable_at is null
          and not s.junk
-         and not thej_is_cover(s.title, s.artist)
+         and not exists (select 1 from song_skip k where k.song_id = s.id)
          and (${songLanguages} && ${langs} or (${unknownLanguage} and ${songLanguages} = '{}'))
          and not (s.id = any(${textArray(ctx.exclude)}))
        order by s.embedding <=> ${v}::vector
@@ -167,7 +167,7 @@ async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
          and lower(s.artist) like any(${artists})
          and s.unavailable_at is null
          and not s.junk
-         and not thej_is_cover(s.title, s.artist)
+         and not exists (select 1 from song_skip k where k.song_id = s.id)
          and not (s.id = any(${textArray(ctx.exclude)}))
        order by s.source_count desc
        limit 100)

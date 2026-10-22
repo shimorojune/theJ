@@ -51,6 +51,10 @@ export const sessions = new Hono<AuthVars>()
   .use(requireAuth)
   .post("/", zValidator("json", StartBody), async (c) => {
     const q = await startSession(db, c.get("userId"), c.req.valid("json"));
+    // The opener goes back now; the next songs follow over the live stream.
+    void getQueue(db, q.sessionId)
+      .then(changed)
+      .catch((e) => console.error("fill after start", e));
     return c.json(await changed(q), 201);
   })
   .get("/:id", async (c) => {

@@ -24,7 +24,7 @@ from demucs.apply import apply_model
 from demucs.pretrained import get_model
 
 SR = 44100
-torch.set_num_threads(2)  # the streamer is capped at 1.5 CPUs; the api keeps its own share
+torch.set_num_threads(1)  # one core at most, at nice 19: downloads and the api come first
 
 
 def load(path):

@@ -132,8 +132,8 @@ async function report() {
 // catalogue unusable.
 const embed = async () => {
   log(`embedded ${await embedPending(log)} songs`);
-  // Untagged songs' languages from labels and artists, for the picker (drizzle/0012).
-  await db.execute(sql`select thej_refresh_song_langs()`);
+  // Untagged songs' languages, covers and artist names, for the picker (drizzle/0012, 0013).
+  await db.execute(sql`select thej_refresh_song_langs(), thej_refresh_picker_tables()`);
 };
 if (what === "all") await embed();
 if (what === "deezer" || what === "all") await crawlDeezer();
@@ -144,7 +144,7 @@ if (what === "tag" || what === "all") {
   if (process.env.OPENROUTER_API_KEY) {
     log(`tagged ${await tagUntagged(Infinity, log)} songs`);
     log(`re-embedded ${await embedPending(log)} tagged songs`);
-    await db.execute(sql`select thej_refresh_song_langs()`);
+    await db.execute(sql`select thej_refresh_song_langs(), thej_refresh_picker_tables()`);
   } else log("OPENROUTER_API_KEY not set: skipping the tag pass");
 }
 await report();

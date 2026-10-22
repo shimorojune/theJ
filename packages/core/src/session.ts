@@ -95,7 +95,9 @@ export async function startSession(
     moodEmbedding,
     artists,
   });
-  return db.transaction(async (tx) => fill(tx, await lock(tx, id)));
+  // Only the opener here, so the phone starts at once; the rest is filled when its live stream
+  // connects (or by the caller in the background) and pushed as a queue update.
+  return db.transaction(async (tx) => fill(tx, await lock(tx, id), { upTo: 1 }));
 }
 
 export async function getSession(db: Db, sessionId: string): Promise<Session | undefined> {
@@ -339,9 +341,13 @@ async function dropAfterCurrent(tx: Tx, sessionId: string) {
     );
 }
 
-async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): Promise<QueueState> {
+async function fill(
+  tx: Tx,
+  s: Session,
+  opts: { preferReady?: boolean; upTo?: number } = {},
+): Promise<QueueState> {
   const items = await committedItems(tx, s.id);
-  const missing = COMMITTED - items.length;
+  const missing = (opts.upTo ?? COMMITTED) - items.length;
   if (missing > 0) {
     const ctx = await context(tx, s);
     const [{ max }] = (await tx

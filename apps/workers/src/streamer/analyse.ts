@@ -64,7 +64,11 @@ export async function splitStems(
 ): Promise<{ inS: number; outS: number }> {
   const beatIn = a.mixInBeatS || (a.bpm > 0 ? 60 / a.bpm : 0.5);
   const beatOut = a.mixOutBeatS || (a.bpm > 0 ? 60 / a.bpm : 0.5);
-  const out = await run("python3", [
+  // Lowest CPU priority: downloads, analysis and the api come first.
+  const out = await run("nice", [
+    "-n",
+    "19",
+    "python3",
     STEMS_SCRIPT,
     path,
     prefix,

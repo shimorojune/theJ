@@ -254,9 +254,11 @@ async function backfillStems() {
     );
   if (rows.length) console.log(`stems queued for ${rows.length} cached songs`);
 }
+// Stems for older cached songs only when STEMS_BACKFILL=1: on the VPS the backfill starved
+// downloads and the api (a mood start took 30 s), so by default only fresh pulls get stems.
 void reanalyse()
   .catch((e) => console.error("reanalyse", e))
-  .then(backfillStems)
+  .then(() => (process.env.STEMS_BACKFILL === "1" ? backfillStems() : undefined))
   .catch((e) => console.error("stems backfill", e));
 
 console.log(`streamer up (dir ${DIR}, egress ${egress.label}, keep ${KEEP_MIN} min)`);
