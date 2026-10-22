@@ -1,3 +1,5 @@
+-- Typo-tolerant artist matching for Ask the DJ (levenshtein).
+CREATE EXTENSION IF NOT EXISTS fuzzystrmatch;--> statement-breakpoint
 -- A title that is a video upload or a re-edit rather than the song itself.
 CREATE OR REPLACE FUNCTION thej_is_junk(title text) RETURNS boolean
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$

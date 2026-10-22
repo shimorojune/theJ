@@ -77,23 +77,41 @@ export function countLanguage(recent: { hi: number; en: number }, langs: string[
 }
 
 /**
- * Artists named in the listener's words ("more from Justin Bieber"), lowercased: credited first
- * artists with a few songs whose whole name appears as words in the text.
+ * Artists named in the listener's words ("more from Justin Bieber", even "justin beiber"),
+ * lowercased: credited first artists with a few songs whose name matches a run of one to
+ * three words in the text, allowing a typo or two in longer names, or the first name alone.
  */
 export async function artistsIn(db: Db, text: string): Promise<string[]> {
-  const words = ` ${text
+  const words = text
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()} `;
-  if (words.trim().length < 4) return [];
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const grams = new Set<string>();
+  for (let n = 1; n <= 3; n++)
+    for (let i = 0; i + n <= words.length; i++) grams.add(words.slice(i, i + n).join(" "));
+  const tries = [...grams].filter((g) => g.length >= 4);
+  if (!tries.length) return [];
+  // Only the closest matches: "justin beiber" is Bieber, not every Justin.
   const rows = await db.execute<{ a: string }>(sql`
     select a from (
+    select a, m.d, min(m.d) over () as best from (
       select lower(trim(split_part(artist, ',', 1))) as a, count(*) as n
       from songs where not junk group by 1
     ) t
+    cross join lateral (
+      -- A first name alone ("arijit") ranks after any spelling of a full name.
+      select min(case when length(g) >= 5 and a like g || ' %' then 2.5 else levenshtein(a, g) end) as d
+      from unnest(${textArray(tries)}) g
+      where abs(length(g) - length(a)) <= 2 or (length(g) >= 5 and a like g || ' %')
+    ) m
     where length(a) >= 4 and n >= 3
-      and position(' ' || a || ' ' in ${words}) > 0
-      and a not in ('love', 'happy', 'chill', 'party', 'dance', 'music', 'songs', 'party', 'night', 'summer', 'heart', 'dream', 'bollywood', 'punjabi', 'hindi', 'english')
+      and (m.d <= case when length(a) >= 10 then 2 when length(a) >= 6 then 1 else 0 end or m.d = 2.5)
+      and (m.d = 0 or n >= 5)
+      and a not in ('love', 'happy', 'chill', 'party', 'dance', 'music', 'songs', 'night', 'summer', 'heart', 'dream', 'bollywood', 'punjabi', 'hindi', 'english', 'more', 'want')
+    ) c
+    where d = best
     order by length(a) desc
     limit 3`);
   return (rows as unknown as { a: string }[]).map((r) => r.a);
