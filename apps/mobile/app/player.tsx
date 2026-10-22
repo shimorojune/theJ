@@ -129,7 +129,7 @@ export default function Player() {
               onPress={togglePlay}
               style={st.play}
             >
-              {status.isBuffering && !status.playing ? (
+              {status.buffering && !status.playing ? (
                 <ActivityIndicator color={c.bg} />
               ) : (
                 <IconButton

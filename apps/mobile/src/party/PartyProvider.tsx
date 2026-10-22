@@ -1,11 +1,4 @@
 import type { Button, Vibe } from "@thej/shared";
-import {
-  type AudioPlaylistStatus,
-  requestNotificationPermissionsAsync,
-  setAudioModeAsync,
-  useAudioPlaylist,
-  useAudioPlaylistStatus,
-} from "expo-audio";
 import * as SecureStore from "expo-secure-store";
 import {
   createContext,
@@ -13,20 +6,34 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
-import { Platform } from "react-native";
 import EventSource from "react-native-sse";
 import { API_URL, ok, useApi } from "../lib/api";
 import { DEV_USER, useSession } from "../lib/auth";
 import type { Queue, Song } from "../lib/types";
+import type { Engine, EngineStatus } from "./engine";
 
 const SESSION_KEY = "thej.session";
 
+/** EXPO_PUBLIC_ENGINE=mixer uses the two-deck mixer (react-native-audio-api); default is expo-audio. */
+const ENGINE = process.env.EXPO_PUBLIC_ENGINE === "mixer" ? "mixer" : "expo";
+
+async function createEngine(): Promise<Engine> {
+  if (ENGINE === "mixer") {
+    const { MixerEngine } = await import("./mixerEngine");
+    return new MixerEngine();
+  }
+  const { ExpoEngine } = await import("./expoEngine");
+  return new ExpoEngine();
+}
+
 type Party = {
   queue: Queue | null;
-  status: AudioPlaylistStatus;
+  status: EngineStatus;
+  engine: "mixer" | "expo";
   starting: boolean;
   error: string | null;
   start: (languages: ("en" | "hi")[], vibe: Vibe) => Promise<void>;
@@ -47,6 +54,14 @@ type Party = {
   nowPlaying: { now: Song | undefined; next: Song | undefined };
 };
 
+const IDLE: EngineStatus = {
+  current: null,
+  playing: false,
+  buffering: false,
+  currentTime: 0,
+  duration: 0,
+};
+
 const Ctx = createContext<Party | null>(null);
 export const useParty = () => {
   const p = useContext(Ctx);
@@ -55,151 +70,69 @@ export const useParty = () => {
 };
 
 /**
- * Owns the party: the server's committed queue (current + next 2) mirrored into one native
- * expo-audio playlist, the live SSE stream, and play events back to the api.
+ * Owns the party: the server's committed queue (current + next 2) handed to a playback engine,
+ * the live SSE stream, and play events back to the api. The server decides what plays.
  */
 export function PartyProvider({ children }: { children: ReactNode }) {
   const api = useApi();
   const { getToken, isSignedIn } = useSession();
-  const playlist = useAudioPlaylist({ updateInterval: 500 });
-  const status = useAudioPlaylistStatus(playlist);
+  const engine = useRef<Engine | null>(null);
+  const [status, setStatus] = useState<EngineStatus>(IDLE);
   const [queue, setQueue] = useState<Queue | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repeat, setRepeat] = useState(false);
-  const lockScreenActive = useRef(false);
-
-  /** Video ids in the native playlist, index for index. */
-  const loaded = useRef<string[]>([]);
   const songs = useRef(new Map<string, Song>());
-  /** Why the next index change happened, when we caused it ourselves. */
-  const reason = useRef<"skip" | "complete" | null>(null);
-  const last = useRef({ index: -1, time: 0, duration: 0 });
   const sessionId = queue?.sessionId;
+  const sessionRef = useRef<string | undefined>(undefined);
+  sessionRef.current = sessionId;
 
-  useEffect(() => {
-    void setAudioModeAsync({
-      playsInSilentMode: true,
-      shouldPlayInBackground: true,
-      interruptionMode: "doNotMix",
-    });
-    // Android 13+ hides the media notification until the app asks for it.
-    if (Platform.OS === "android") void requestNotificationPermissionsAsync().catch(() => {});
+  /** Hand the server's queue to the engine; only songs whose audio is pulled are playable. */
+  const apply = useCallback((q: Queue) => {
+    for (const s of [...q.committed, ...(q.upcoming ?? [])]) songs.current.set(s.songId, s);
+    setQueue((prev) => ({ ...q, upcoming: q.upcoming ?? prev?.upcoming }));
+    const playable = q.committed.filter((s) => s.ready !== false);
+    engine.current?.setQueue(playable);
+    if (q.skipTo && playable[1]?.songId === q.skipTo) engine.current?.next("complete");
   }, []);
-
-  /** First call creates the media session; later ones only swap the metadata, so it doesn't flicker. */
-  const lockScreen = useCallback(
-    (song: Song | undefined) => {
-      if (!song) return;
-      const meta = { title: song.title, artist: song.artist, artworkUrl: song.thumbUrl };
-      if (lockScreenActive.current) {
-        playlist.updateLockScreenMetadata(meta);
-        return;
-      }
-      playlist.setActiveForLockScreen(true, meta, {
-        showNextTrack: true,
-        showPreviousTrack: false,
-      });
-      lockScreenActive.current = true;
-    },
-    [playlist],
-  );
-
-  /** Make the native playlist match the server's committed queue without interrupting the current song. */
-  const apply = useCallback(
-    (q: Queue) => {
-      for (const s of [...q.committed, ...(q.upcoming ?? [])]) songs.current.set(s.songId, s);
-      setQueue((prev) => ({ ...q, upcoming: q.upcoming ?? prev?.upcoming }));
-      // Only songs whose audio is pulled go into the native playlist; the rest arrive over SSE.
-      const playable = q.committed.filter((s) => s.ready !== false);
-      const ids = playable.map((s) => s.songId);
-      const cur = playlist.currentIndex;
-      const curId = loaded.current[cur];
-
-      if (!curId || !ids.includes(curId)) {
-        playlist.clear();
-        loaded.current = [];
-        for (const s of playable) {
-          playlist.add({ uri: s.audioUrl, name: s.title });
-          loaded.current.push(s.songId);
-        }
-        last.current = { index: 0, time: 0, duration: 0 };
-        if (playable.length) {
-          playlist.play();
-          lockScreen(playable[0]);
-        }
-        return;
-      }
-
-      const k = ids.indexOf(curId);
-      const want = ids.slice(k + 1);
-      const have = loaded.current.slice(cur + 1);
-      if (want.join() !== have.join()) {
-        for (let i = loaded.current.length - 1; i > cur; i--) {
-          playlist.remove(i);
-          loaded.current.splice(i, 1);
-        }
-        for (const s of playable.slice(k + 1)) {
-          playlist.add({ uri: s.audioUrl, name: s.title });
-          loaded.current.push(s.songId);
-        }
-      }
-      if (q.skipTo && loaded.current[cur + 1] === q.skipTo) {
-        // A long press: jumping isn't a dislike, so it's reported as finished, not skipped.
-        reason.current = "complete";
-        playlist.next();
-      }
-    },
-    [playlist, lockScreen],
-  );
 
   const send = useCallback(
     async (songId: string, event: "start" | "skip" | "complete" | "like" | "unlike") => {
-      if (!sessionId) return;
+      const id = sessionRef.current;
+      if (!id) return;
       const res = await api.sessions[":id"].events.$post({
-        param: { id: sessionId },
+        param: { id },
         json: { songId, event },
       });
       if (res.status === 200) apply(await ok<Queue>(res));
     },
-    [api, sessionId, apply],
+    [api, apply],
   );
 
-  // A song changed (it ended, or someone pressed next here or on the lock screen): tell the server.
+  // One engine for the provider's life; it reports status and song changes.
   useEffect(() => {
-    const prev = last.current;
-    if (status.currentIndex !== prev.index && prev.index >= 0) {
-      const prevId = loaded.current[prev.index];
-      const finished = prev.duration > 0 && prev.time >= prev.duration - 3;
-      const kind = reason.current ?? (finished ? "complete" : "skip");
-      reason.current = null;
-      const nowId = loaded.current[status.currentIndex];
-      lockScreen(nowId ? songs.current.get(nowId) : undefined);
-      if (nowId) void send(nowId, "start").catch(() => {});
-      if (prevId) void send(prevId, kind).catch((e) => setError(String(e)));
-    }
-    last.current = {
-      index: status.currentIndex,
-      time: status.currentTime,
-      duration: status.duration,
+    let alive = true;
+    let offStatus = () => {};
+    let offTrack = () => {};
+    void createEngine().then((e) => {
+      if (!alive) return e.destroy();
+      engine.current = e;
+      offStatus = e.onStatus(setStatus);
+      offTrack = e.onTrackChange(({ from, to, reason }) => {
+        if (to) void send(to, "start").catch(() => {});
+        if (from) void send(from, reason).catch((err) => setError(String(err)));
+      });
+    });
+    return () => {
+      alive = false;
+      offStatus();
+      offTrack();
+      engine.current?.destroy();
+      engine.current = null;
     };
-  }, [status.currentIndex, status.currentTime, status.duration, send, lockScreen]);
+  }, [send]);
 
-  // The last committed song ran out with nothing after it: report it so the server refills.
-  useEffect(() => {
-    const atEnd = status.currentIndex === loaded.current.length - 1;
-    if (
-      atEnd &&
-      !status.playing &&
-      status.duration > 0 &&
-      status.currentTime >= status.duration - 0.5
-    ) {
-      const id = loaded.current[status.currentIndex];
-      if (id) void send(id, "complete").catch(() => {});
-    }
-  }, [status.playing, status.currentTime, status.duration, status.currentIndex, send]);
-
-  // Live queue changes from the server (another phone pressing a button, or a refill landing).
+  // Live queue changes from the server (a pad move from another phone, audio becoming ready).
   useEffect(() => {
     if (!sessionId || !isSignedIn) return;
     let es: EventSource<"queue" | "ping"> | null = null;
@@ -228,7 +161,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     };
   }, [sessionId, isSignedIn, getToken, apply]);
 
-  // Resume the last party after the app restarts.
+  // Resume the last mood after the app restarts.
   useEffect(() => {
     if (!isSignedIn) return;
     void (async () => {
@@ -245,13 +178,11 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       setStarting(true);
       setError(null);
       try {
-        playlist.clear();
-        loaded.current = [];
+        engine.current?.clear();
         const q = await ok<Queue>(await api.sessions.$post({ json: { languages, vibe } }));
         await SecureStore.setItemAsync(SESSION_KEY, q.sessionId);
+        sessionRef.current = q.sessionId;
         apply(q);
-        const first = q.committed[0];
-        if (first) void send(first.songId, "start").catch(() => {});
       } catch (e) {
         setError(String(e));
         throw e;
@@ -259,78 +190,59 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         setStarting(false);
       }
     },
-    [api, apply, playlist, send],
+    [api, apply],
   );
 
+  const control = useCallback(
+    async (
+      json:
+        | { kind: "button"; button: Button; now: boolean }
+        | { kind: "pad"; vibe: Vibe; now: boolean },
+    ) => {
+      if (!sessionId) return;
+      const res = await api.sessions[":id"].control.$post({ param: { id: sessionId }, json });
+      apply(await ok<Queue>(res));
+    },
+    [api, sessionId, apply],
+  );
   const press = useCallback(
-    async (button: Button, now: boolean) => {
-      if (!sessionId) return;
-      const res = await api.sessions[":id"].control.$post({
-        param: { id: sessionId },
-        json: { kind: "button", button, now },
-      });
-      apply(await ok<Queue>(res));
-    },
-    [api, sessionId, apply],
+    (button: Button, now: boolean) => control({ kind: "button", button, now }),
+    [control],
   );
-
   const setVibe = useCallback(
-    async (vibe: Vibe, now: boolean) => {
-      if (!sessionId) return;
-      const res = await api.sessions[":id"].control.$post({
-        param: { id: sessionId },
-        json: { kind: "pad", vibe, now },
-      });
-      apply(await ok<Queue>(res));
-    },
-    [api, sessionId, apply],
+    (vibe: Vibe, now: boolean) => control({ kind: "pad", vibe, now }),
+    [control],
   );
 
-  const skip = useCallback(() => {
-    if (playlist.currentIndex >= loaded.current.length - 1) return;
-    reason.current = "skip";
-    playlist.next();
-  }, [playlist]);
-
-  const jumpNext = useCallback(() => {
-    if (playlist.currentIndex >= loaded.current.length - 1) return;
-    reason.current = "complete";
-    playlist.next();
-  }, [playlist]);
-
-  const seek = useCallback((seconds: number) => void playlist.seekTo(seconds), [playlist]);
-
+  const skip = useCallback(() => engine.current?.next("skip"), []);
+  const jumpNext = useCallback(() => engine.current?.next("complete"), []);
+  const togglePlay = useCallback(() => {
+    if (status.playing) engine.current?.pause();
+    else engine.current?.play();
+  }, [status.playing]);
+  const restart = useCallback(() => engine.current?.restart(), []);
+  const seek = useCallback((s: number) => engine.current?.seek(s), []);
   const toggleRepeat = useCallback(() => {
     setRepeat((r) => {
-      playlist.loop = r ? "none" : "single";
+      engine.current?.setRepeat(!r);
       return !r;
     });
-  }, [playlist]);
-
-  const togglePlay = useCallback(() => {
-    if (playlist.playing) playlist.pause();
-    else playlist.play();
-  }, [playlist]);
-
-  const restart = useCallback(() => void playlist.seekTo(0), [playlist]);
+  }, []);
 
   const toggleLike = useCallback(async () => {
-    const id = loaded.current[playlist.currentIndex];
+    const id = status.current;
     if (!id) return;
     await send(id, queue?.liked.includes(id) ? "unlike" : "like");
-  }, [playlist, send, queue?.liked]);
+  }, [status.current, send, queue?.liked]);
 
   const end = useCallback(async () => {
     if (sessionId)
       await api.sessions[":id"].end.$post({ param: { id: sessionId } }).catch(() => {});
     await SecureStore.deleteItemAsync(SESSION_KEY);
-    playlist.pause();
-    playlist.clear();
-    playlist.clearLockScreenControls();
-    lockScreenActive.current = false;
-    loaded.current = [];
+    engine.current?.clear();
+    sessionRef.current = undefined;
     setQueue(null);
-  }, [api, sessionId, playlist]);
+  }, [api, sessionId]);
 
   const upcoming = useCallback(async () => {
     if (!sessionId) return [];
@@ -338,16 +250,18 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     return q.upcoming ?? [];
   }, [api, sessionId]);
 
-  const nowPlaying = {
-    now: songs.current.get(loaded.current[status.currentIndex] ?? ""),
-    next: songs.current.get(loaded.current[status.currentIndex + 1] ?? ""),
-  };
+  const nowPlaying = useMemo(() => {
+    const committed = queue?.committed ?? [];
+    const i = committed.findIndex((s) => s.songId === status.current);
+    return { now: i >= 0 ? committed[i] : undefined, next: i >= 0 ? committed[i + 1] : undefined };
+  }, [queue, status.current]);
 
   return (
     <Ctx.Provider
       value={{
         queue,
         status,
+        engine: ENGINE,
         starting,
         error,
         start,
@@ -371,8 +285,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/** The song the native player is on right now (it can be a beat ahead of the server). */
+/** The song the engine is on right now. */
 export function useNowPlaying(): { now: Song | undefined; next: Song | undefined } {
-  const { nowPlaying } = useParty();
-  return nowPlaying;
+  return useParty().nowPlaying;
 }
