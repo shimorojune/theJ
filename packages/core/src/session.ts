@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { audioCache, type Db, playEvents, queueItems, sessions, songs, users } from "@thej/db";
 import { applyButton, type Button, stepToward, type Vibe } from "@thej/shared";
-import { and, asc, desc, eq, gt, gte, inArray, isNotNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { embedText } from "./embed";
 import { choose, pickCandidates } from "./pick";
 
@@ -333,7 +333,8 @@ async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): P
         preferReady,
         limit: 20,
       });
-      const best = choose(cands);
+      // The opener draws from a wide band: the same mood should not open the same way twice.
+      const best = choose(cands, { jitter: preferReady ? 0.1 : 0.03, preferReady });
       if (!best) break;
       picked.push(best.id);
       position++;
@@ -408,9 +409,20 @@ async function context(tx: Tx, s: Session) {
   const languages = filters.languages ?? user?.languages ?? ["en", "hi"];
   const monthAgo = new Date(Date.now() - 30 * 86_400_000);
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
+  const dayAgo = new Date(Date.now() - 86_400_000);
 
   const [sessionItems, heard, liked, current] = await Promise.all([
-    tx.select({ songId: queueItems.songId }).from(queueItems).where(eq(queueItems.sessionId, s.id)),
+    // Queued in any of this user's moods today, played or not: a restarted mood opens differently.
+    tx
+      .select({ songId: queueItems.songId })
+      .from(queueItems)
+      .innerJoin(sessions, eq(sessions.id, queueItems.sessionId))
+      .where(
+        and(
+          eq(sessions.userId, s.userId),
+          or(eq(queueItems.sessionId, s.id), gte(sessions.startedAt, dayAgo)),
+        ),
+      ),
     // Anything started or skipped in the last 30 days stays out: repeats are what bores a room.
     tx
       .select({ songId: playEvents.songId, event: playEvents.event, at: playEvents.at })

@@ -50,7 +50,7 @@ export type PickContext = {
 export async function pickCandidates(db: Db, ctx: PickContext): Promise<Candidate[]> {
   const v = vectorLiteral(ctx.moodEmbedding);
   const tempo = ctx.currentTempo ?? null;
-  const readyBonus = ctx.preferReady ? 0.08 : 0;
+  const readyBonus = ctx.preferReady ? 0.02 : 0;
   const rows = await db.execute<Candidate>(sql`
     with scored as (
       select s.id, s.title, s.artist, s.energy, s.valence, s.tempo, s.era, s.source_count as "sourceCount",
@@ -85,10 +85,19 @@ export async function pickCandidates(db: Db, ctx: PickContext): Promise<Candidat
   }));
 }
 
-/** Best candidate with a little randomness, so two sessions with the same mood don't match. */
-export function choose(cands: Candidate[], jitter = 0.03): Candidate | undefined {
+/**
+ * A random candidate from the band near the best, so two sessions with the same mood don't
+ * match. With `preferReady`, a song whose audio is already here wins within that band (it
+ * starts instantly) but never over a clearly better fit outside it.
+ */
+export function choose(
+  cands: Candidate[],
+  opts: { jitter?: number; preferReady?: boolean } = {},
+): Candidate | undefined {
   const best = cands[0];
   if (!best) return undefined;
-  const close = cands.filter((c) => c.score - best.score <= jitter);
-  return close[Math.floor(Math.random() * close.length)] ?? best;
+  const close = cands.filter((c) => c.score - best.score <= (opts.jitter ?? 0.03));
+  const ready = opts.preferReady ? close.filter((c) => c.ready) : [];
+  const pool = ready.length ? ready : close;
+  return pool[Math.floor(Math.random() * pool.length)] ?? best;
 }

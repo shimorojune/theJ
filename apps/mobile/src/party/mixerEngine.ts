@@ -3,6 +3,7 @@ import {
   type AudioBufferSourceNode,
   AudioContext,
   AudioManager,
+  type BiquadFilterNode,
   type GainNode,
   PlaybackNotificationManager,
 } from "react-native-audio-api";
@@ -11,14 +12,24 @@ import type { Engine, EngineStatus, TrackChange } from "./engine";
 
 /** How far ahead of the mix point the next song must be decoded. */
 const PRELOAD_AHEAD_S = 90;
-/** Crossfade length in beats, and the ceiling for tempo matching. */
-const FADE_BEATS = 16;
+/**
+ * A planned mix: the next song runs beat-matched under the current one with its bass cut for
+ * IN beats, the bass swaps on a beat, and the current song drops out over OUT beats.
+ */
+const MIX = { in: 16, out: 8 };
+/** A skip is the same move, just fast. */
+const SKIP = { in: 2, out: 2 };
 const MAX_TEMPO_STRETCH = 0.08;
+/** The bass shelf each deck has: cut while a song is coming in, open once it owns the floor. */
+const BASS_HZ = 180;
+const BASS_CUT_DB = -18;
 
 type Deck = {
   song: Song;
   buffer: AudioBuffer;
   source: AudioBufferSourceNode;
+  /** Low shelf: the bass swap is what makes two beat-matched songs sound like one. */
+  filter: BiquadFilterNode;
   gain: GainNode;
   /** Context time at which `offset` of the buffer started playing. */
   startedAt: number;
@@ -29,8 +40,9 @@ type Deck = {
 
 /**
  * The DJ engine: two decks on one AudioContext. The next song is decoded ahead of time and
- * started on the current song's mix-out beat, tempo-matched to it, while the gains cross over.
- * After the mix its tempo eases back to normal. Skips are a short crossfade too, never silence.
+ * started on the current song's beat grid at its mix-out point, tempo-matched, bass cut; after
+ * 16 beats the bass swaps and the current song drops out over 8. Then the new song's tempo eases
+ * back to its own. Skips are the same move in a few beats, never silence.
  */
 export class MixerEngine implements Engine {
   private ctx = new AudioContext();
@@ -95,7 +107,8 @@ export class MixerEngine implements Engine {
       const deck =
         this.nextDeck?.song.songId === after.songId ? this.nextDeck : await this.makeDeck(after);
       this.nextDeck = null;
-      this.mixInto(deck, this.ctx.currentTime + 0.05, 1.5, reason);
+      const when = this.onGrid(this.current, this.ctx.currentTime + 0.05, 1);
+      this.mixInto(deck, when, SKIP, reason);
     })();
   }
 
@@ -115,10 +128,25 @@ export class MixerEngine implements Engine {
     const buffer = await this.decode(song);
     const source = this.ctx.createBufferSource({ pitchCorrection: true });
     source.buffer = buffer;
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowshelf";
+    filter.frequency.value = BASS_HZ;
+    filter.gain.value = 0;
     const gain = this.ctx.createGain();
-    source.connect(gain);
+    source.connect(filter);
+    filter.connect(gain);
     gain.connect(this.master);
-    return { song, buffer, source, gain, startedAt: 0, offset: 0, rate: 1, started: false };
+    return {
+      song,
+      buffer,
+      source,
+      filter,
+      gain,
+      startedAt: 0,
+      offset: 0,
+      rate: 1,
+      started: false,
+    };
   }
 
   private async playNow(song: Song) {
@@ -188,58 +216,95 @@ export class MixerEngine implements Engine {
     return deck.offset + (this.ctx.currentTime - deck.startedAt) * deck.rate;
   }
 
+  /** Context time at which `deck` plays second `t` of its song (while its rate holds). */
+  private atSongTime(deck: Deck, t: number): number {
+    return deck.startedAt + (t - deck.offset) / deck.rate;
+  }
+
+  /** One beat of `deck` in context seconds. */
+  private beatSeconds(deck: Deck | null, fallback: Song): number {
+    const bpm = deck?.song.bpm || fallback.bpm || 100;
+    return 60 / bpm / (deck?.rate ?? 1);
+  }
+
+  /**
+   * The first point at or after `earliest` on the current song's beat grid, counted in groups
+   * of `beats` from its mix-out beat. Without a beat grid, `earliest` itself.
+   */
+  private onGrid(cur: Deck | null, earliest: number, beats: number): number {
+    if (!cur?.song.bpm || cur.song.mixOutS == null || this.paused) return earliest;
+    const anchor = this.atSongTime(cur, cur.song.mixOutS);
+    const period = this.beatSeconds(cur, cur.song) * beats;
+    return anchor + Math.ceil((earliest - anchor) / period - 1e-6) * period;
+  }
+
   /** Arm a timer for the current song's mix-out point once the next deck is decoded. */
   private scheduleMix() {
     clearTimeout(this.mixTimer);
     const cur = this.current;
     const nxt = this.nextDeck;
     if (!cur || !nxt || this.paused || this.repeat) return;
-    const dur = cur.buffer.duration;
-    const mixOut = cur.song.mixOutS ?? dur - 8;
-    const fadeS = this.fadeSeconds(cur.song, nxt.song);
-    const inS = Math.max(0.2, (mixOut - this.position(cur)) / cur.rate - 0.25);
+    const mixOut = cur.song.mixOutS ?? cur.buffer.duration - 8;
+    const inS = Math.max(0.2, (mixOut - this.position(cur)) / cur.rate - 0.3);
     this.mixTimer = setTimeout(() => {
       if (this.current !== cur || this.nextDeck !== nxt) return;
       this.nextDeck = null;
-      const when = this.ctx.currentTime + 0.25;
-      this.mixInto(nxt, when, fadeS, "complete");
+      // Exactly the mix-out beat, or the next bar if we are late.
+      const when = this.onGrid(cur, this.ctx.currentTime + 0.05, 4);
+      this.mixInto(nxt, when, MIX, "complete");
     }, inS * 1000);
   }
 
-  private fadeSeconds(a: Song, b: Song): number {
-    const bpm = a.bpm || b.bpm || 100;
-    return Math.min(14, Math.max(4, (FADE_BEATS * 60) / bpm));
-  }
-
-  /** Bring `deck` in at `when`, tempo-matched to the current deck, and fade the current one out. */
-  private mixInto(deck: Deck, when: number, fadeS: number, reason: "skip" | "complete") {
+  /**
+   * Bring `deck` in at `when` on the current deck's beat grid, tempo-matched, bass cut. After
+   * `plan.in` beats the bass swaps and the current deck drops out over `plan.out` beats.
+   */
+  private mixInto(
+    deck: Deck,
+    when: number,
+    plan: { in: number; out: number },
+    reason: "skip" | "complete",
+  ) {
     const cur = this.current;
     const from = cur?.song.songId ?? null;
     let rate = 1;
     if (cur?.song.bpm && deck.song.bpm) {
-      const r = cur.song.bpm / deck.song.bpm;
+      const r = (cur.song.bpm * cur.rate) / deck.song.bpm;
       const candidates = [r, r / 2, r * 2];
       const best = candidates.reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p), r);
       if (Math.abs(best - 1) <= MAX_TEMPO_STRETCH) rate = best;
     }
+    const beat = this.beatSeconds(cur, deck.song);
+    const inS = Math.min(14, plan.in * beat);
+    const outS = Math.min(8, plan.out * beat);
+    const swap = when + inS;
+    const end = swap + outS;
+
+    deck.filter.gain.setValueAtTime(BASS_CUT_DB, when);
+    deck.filter.gain.linearRampToValueAtTime(0, swap + beat);
     deck.gain.gain.setValueAtTime(0, when);
-    deck.gain.gain.linearRampToValueAtTime(1, when + fadeS);
+    deck.gain.gain.linearRampToValueAtTime(1, swap);
     this.startDeck(deck, when, deck.song.mixInS ?? 0, rate);
-    // Ease back to the song's own tempo over 20 s after the fade.
-    if (rate !== 1) deck.source.playbackRate.linearRampToValueAtTime(1, when + fadeS + 20);
+    // Ease back to the song's own tempo over 20 s once it owns the floor.
+    if (rate !== 1) {
+      deck.source.playbackRate.setValueAtTime(rate, end);
+      deck.source.playbackRate.linearRampToValueAtTime(1, end + 20);
+    }
     if (cur) {
+      cur.filter.gain.setValueAtTime(0, swap);
+      cur.filter.gain.linearRampToValueAtTime(BASS_CUT_DB, swap + beat);
       cur.gain.gain.cancelScheduledValues(when);
-      cur.gain.gain.setValueAtTime(1, when);
-      cur.gain.gain.linearRampToValueAtTime(0, when + fadeS);
+      cur.gain.gain.setValueAtTime(1, swap);
+      cur.gain.gain.linearRampToValueAtTime(0, end);
       cur.source.onEnded = null;
       try {
-        cur.source.stop(when + fadeS + 0.1);
+        cur.source.stop(end + 0.1);
       } catch {}
-      setTimeout(() => this.decoding.delete(cur.song.songId), (fadeS + 2) * 1000);
+      setTimeout(() => this.decoding.delete(cur.song.songId), (end - when + 2) * 1000);
     }
     this.current = deck;
     this.paused = false;
-    // Rate drifts back to 1 after the fade; track it for position maths.
+    // Rate drifts back to 1 after the mix; track it for position maths.
     setTimeout(
       () => {
         if (this.current === deck) {
@@ -248,7 +313,7 @@ export class MixerEngine implements Engine {
           deck.rate = 1;
         }
       },
-      (fadeS + 20) * 1000,
+      (end - this.ctx.currentTime + 20) * 1000,
     );
     this.announce(deck.song);
     for (const cb of this.trackCbs) cb({ from, to: deck.song.songId, reason });
