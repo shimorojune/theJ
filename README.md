@@ -11,16 +11,16 @@ service that fetches songs with yt-dlp, analyses them once, and plans the queue.
 apps/
   mobile/    Expo 58 Android app (Expo Router, Clerk, expo-audio playlist + lock screen)
   api/       Hono on Node: Clerk JWT auth, sessions, SSE, signed audio URLs
-  workers/   BullMQ workers, one entrypoint each: fetcher, analysis, planner
+  workers/   catalog crawler + tagger + embeddings, streamer (on-demand audio), arranger sets
 packages/
   shared/    zod schemas, queue names, DJ engine math (used by app, api, workers)
-  db/        Drizzle schema + client for Postgres
+  db/        Drizzle schema + client for Postgres (pgvector)
 infra/       local dev compose, Dokploy stack, home proxy (see infra/README.md)
 ```
 
 ## Getting started
 
-Needs Node 24+, pnpm 9+ and Docker (or OrbStack) for local Postgres, Redis and MinIO.
+Needs Node 24+, pnpm 9+ and Docker (or OrbStack) for local Postgres (pgvector) and Redis.
 
 ```sh
 pnpm install
@@ -31,18 +31,16 @@ pnpm dev:api             # http://localhost:3000/health
 pnpm dev:fetcher         # needs yt-dlp + ffmpeg locally, or run it on Dokploy
 ```
 
-Fetch pipeline (fetcher + bgutil + analysis run in Docker, so no yt-dlp/ffmpeg on the Mac):
+Catalog and streamer (v3):
 
 ```sh
-pnpm workers:up                  # build + start the workers (profile "workers")
-pnpm seed                        # resolve 50 Hindi + English songs, queue fetches
-pnpm status                      # tracks per status + features of ready songs
-pnpm requeue                     # retry failed jobs
-pnpm workers:logs
+pnpm crawl deezer            # mood playlists from Deezer (metadata only)
+pnpm crawl ytmusic           # YouTube Music Moods & genres
+pnpm crawl embed             # mood-space embeddings (local MiniLM, fast)
+pnpm crawl tag               # language / era / mood via a free OpenRouter model (slow; TAG_SHARD=k/N to parallelise)
+pnpm sets                    # print 12-song sets for five moods, to judge the arranger by ear
+pnpm workers:up              # streamer + bgutil in Docker (amd64 image with Essentia; emulated on Apple Silicon)
 ```
-
-Downloads go direct unless `HOME_PROXY` is set. That's fine when the Mac is on the home network
-(same exit IP as the proxy). Elsewhere, run `pnpm proxy:forward` and set `HOME_PROXY` as in `.env.example`.
 
 Engine + api from the terminal (dev auth, no Clerk needed locally):
 

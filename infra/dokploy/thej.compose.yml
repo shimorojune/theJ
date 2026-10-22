@@ -1,8 +1,8 @@
-# theJ production stack on Dokploy (Compose "fetcher" in project "deejay", built from this repo).
+# theJ v3 stack on Dokploy (Compose "fetcher" in project "deejay", built from this repo).
 # Secrets come from Dokploy > Compose > Environment:
-#   required: POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD, AUDIO_URL_SIGNING_SECRET,
-#             TS_AUTHKEY, HOME_PROXY_IP, PROXY_PASS
-#   later:    CLERK_SECRET_KEY, LASTFM_API_KEY, OPENROUTER_API_KEY, LLM_*_MODEL, FALLBACK_PROXY
+#   required: POSTGRES_PASSWORD, AUDIO_URL_SIGNING_SECRET, TS_AUTHKEY, HOME_PROXY_IP, PROXY_PASS
+#   catalog:  OPENROUTER_API_KEY (tagging), JEV_API_KEY (later)
+#   later:    CLERK_SECRET_KEY, FALLBACK_PROXY
 # api is the only service with a public domain (via Dokploy Traefik on dokploy-network).
 # The compose keeps the probe's project name, so the Tailscale node identity (ts-state) carries over.
 services:
@@ -11,38 +11,19 @@ services:
     environment: &app-env
       DATABASE_URL: postgres://thej:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/thej
       REDIS_URL: redis://redis:6379
-      S3_ENDPOINT: http://minio:9000
-      S3_BUCKET: audio
-      S3_ACCESS_KEY_ID: thej
-      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET:?set AUDIO_URL_SIGNING_SECRET}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://thej.rraj.dev}
+      STREAM_DIR: /data/stream
+      HF_HOME: /data/hf
       NODE_ENV: production
+    volumes:
+      - stream-data:/data/stream
+      - hf-cache:/data/hf
     depends_on: &after-migrate
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_started }
-      minio: { condition: service_started }
     networks: [default, dokploy-network]
-    restart: unless-stopped
-
-  planner:
-    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
-    command: ["node", "--import", "tsx", "src/planner/index.ts"]
-    environment:
-      <<: *app-env
-      LASTFM_API_KEY: ${LASTFM_API_KEY:-}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      LLM_INTERPRET_MODEL: ${LLM_INTERPRET_MODEL:-}
-      LLM_REFILL_MODEL: ${LLM_REFILL_MODEL:-}
-    depends_on: *after-migrate
-    restart: unless-stopped
-
-  analysis:
-    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
-    command: ["node", "--import", "tsx", "src/analysis/index.ts"]
-    environment: *app-env
-    depends_on: *after-migrate
     restart: unless-stopped
 
   migrate:
@@ -53,8 +34,21 @@ services:
       postgres: { condition: service_healthy }
     restart: on-failure:5
 
-  # Fetcher, bgutil and tailscale share one network namespace. Tailscale also joins the
-  # default network so the fetcher can reach redis and minio by name.
+  # One-shot catalog crawl + embed + tag on every deploy; idempotent, re-crawls playlists after 7 days.
+  catalog:
+    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
+    command: ["node", "--import", "tsx", "src/catalog/crawl.ts", "all"]
+    environment:
+      <<: *app-env
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      TAG_SHARD: 0/1
+    volumes:
+      - hf-cache:/data/hf
+    depends_on: *after-migrate
+    restart: "no"
+
+  # Streamer, bgutil and tailscale share one network namespace. Tailscale also joins the
+  # default network so the streamer can reach postgres and redis by name.
   tailscale:
     image: tailscale/tailscale:v1.104.2
     hostname: deejay-fetcher
@@ -76,14 +70,17 @@ services:
     depends_on: [tailscale]
     restart: unless-stopped
 
-  fetcher:
-    build: { context: ../.., dockerfile: apps/workers/fetcher.Dockerfile }
+  streamer:
+    build: { context: ../.., dockerfile: apps/workers/streamer.Dockerfile }
     network_mode: service:tailscale
     environment:
       <<: *app-env
       HOME_PROXY: socks5h://deejay:${PROXY_PASS:?set PROXY_PASS}@${HOME_PROXY_IP:?set HOME_PROXY_IP}:1080
       FALLBACK_PROXY: ${FALLBACK_PROXY:-}
-      FETCH_CONCURRENCY: "1"
+      STREAM_CONCURRENCY: "2"
+      STREAM_KEEP_MIN: "45"
+    volumes:
+      - stream-data:/data/stream
     depends_on:
       <<: *after-migrate
       tailscale: { condition: service_started }
@@ -109,20 +106,12 @@ services:
     volumes: [redis-data:/data]
     restart: unless-stopped
 
-  minio:
-    image: cgr.dev/chainguard/minio:latest
-    command: ["server", "/data"]
-    environment:
-      MINIO_ROOT_USER: thej
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
-    volumes: [minio-data:/data]
-    restart: unless-stopped
-
 volumes:
   ts-state:
   pg-data:
   redis-data:
-  minio-data:
+  stream-data:
+  hf-cache:
 
 networks:
   dokploy-network:

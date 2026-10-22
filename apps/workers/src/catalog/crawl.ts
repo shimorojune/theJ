@@ -129,8 +129,14 @@ async function report() {
 
 if (what === "deezer" || what === "all") await crawlDeezer();
 if (what === "ytmusic" || what === "all") await crawlYtMusic();
-if (what === "tag" || what === "all") log(`tagged ${await tagUntagged(Infinity, log)} songs`);
+// Embed before tagging so sessions work within minutes; re-embed after tags land.
 if (what === "embed" || what === "all") log(`embedded ${await embedPending(log)} songs`);
+if (what === "tag" || what === "all") {
+  if (process.env.OPENROUTER_API_KEY) {
+    log(`tagged ${await tagUntagged(Infinity, log)} songs`);
+    log(`re-embedded ${await embedPending(log)} tagged songs`);
+  } else log("OPENROUTER_API_KEY not set: skipping the tag pass");
+}
 await report();
 await connection.quit();
 process.exit(0);
