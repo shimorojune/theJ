@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 
 # Stems for DJ hand-overs (stems.py): CPU torch, Demucs, PyAV; the htdemucs weights are baked in
 # so a fresh container splits without a download. Before the nightly yt-dlp layer so a CACHEBUST
 # rebuild doesn't pull torch again.
-RUN pip install --break-system-packages -q torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu \
+RUN pip install --break-system-packages -q "torch==2.5.1+cpu" --extra-index-url https://download.pytorch.org/whl/cpu \
   && pip install --break-system-packages -q demucs==4.1.0 av==13.1.0 \
   && python3 -c "from demucs.pretrained import get_model; get_model('htdemucs')"
 ARG CACHEBUST
