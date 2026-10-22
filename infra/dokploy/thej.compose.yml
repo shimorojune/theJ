@@ -75,6 +75,7 @@ services:
       FALLBACK_PROXY: ${FALLBACK_PROXY:-}
       STREAM_CONCURRENCY: "2"
       STREAM_KEEP_MIN: "45"
+    volumes:
       - stream-data:/data/stream
     depends_on:
       <<: *after-migrate
