@@ -149,9 +149,18 @@ export class MixerEngine implements Engine {
     };
   }
 
+  private starting: string | null = null;
   private async playNow(song: Song) {
-    const deck = await this.makeDeck(song);
-    if (this.current) return; // something else started meanwhile
+    // Queue updates arrive in bursts while the first song decodes; start it once.
+    if (this.starting === song.songId) return;
+    this.starting = song.songId;
+    let deck: Deck;
+    try {
+      deck = await this.makeDeck(song);
+    } finally {
+      if (this.starting === song.songId) this.starting = null;
+    }
+    if (this.current) return this.retire(deck); // something else started meanwhile
     deck.gain.gain.value = 1;
     this.startDeck(deck, this.ctx.currentTime + 0.05, 0, 1);
     this.current = deck;
@@ -175,28 +184,55 @@ export class MixerEngine implements Engine {
     };
   }
 
+  /** Unhook a deck that has stopped (or never started) so its nodes and buffer can go. */
+  private retire(deck: Deck, afterS = 0) {
+    setTimeout(
+      () => {
+        if (this.current === deck || this.nextDeck === deck) return;
+        for (const n of [deck.source, deck.filter, deck.gain]) {
+          try {
+            n.disconnect();
+          } catch {}
+        }
+        if (this.current?.song.songId !== deck.song.songId) this.decoding.delete(deck.song.songId);
+      },
+      Math.max(0, afterS) * 1000 + 250,
+    );
+  }
+
   private stopDeck(deck: Deck | null, fadeS: number) {
     if (!deck?.started) {
-      if (deck) this.decoding.delete(deck.song.songId);
+      if (deck) this.retire(deck);
       return;
     }
     const t = this.ctx.currentTime;
     deck.gain.gain.cancelScheduledValues(t);
     deck.gain.gain.setValueAtTime(deck.gain.gain.value, t);
     deck.gain.gain.linearRampToValueAtTime(0, t + fadeS);
-    deck.source.onEnded = null;
     try {
       deck.source.stop(t + fadeS + 0.05);
     } catch {}
-    setTimeout(() => this.decoding.delete(deck.song.songId), (fadeS + 1) * 1000);
+    this.retire(deck, fadeS + 0.1);
   }
 
+  private preparing: string | null = null;
+  /** Context time the current mix ends; nothing new is decoded before then. */
+  private mixingUntil = 0;
   private async prepareNext(song: Song) {
-    const deck = await this.makeDeck(song);
+    if (this.preparing === song.songId) return;
+    this.preparing = song.songId;
+    const wait = this.mixingUntil - this.ctx.currentTime;
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait * 1000 + 500));
+    let deck: Deck;
+    try {
+      deck = await this.makeDeck(song);
+    } finally {
+      if (this.preparing === song.songId) this.preparing = null;
+    }
     if (this.queue.some((s) => s.songId === song.songId) && !this.nextDeck) {
       this.nextDeck = deck;
       this.scheduleMix();
-    }
+    } else this.retire(deck);
   }
 
   private cancelNext() {
@@ -268,6 +304,15 @@ export class MixerEngine implements Engine {
     const cur = this.current;
     const from = cur?.song.songId ?? null;
     let rate = 1;
+    console.log(
+      "[mixer] mixInto",
+      deck.song.songId,
+      reason,
+      "at",
+      when.toFixed(2),
+      "now",
+      this.ctx.currentTime.toFixed(2),
+    );
     if (cur?.song.bpm && deck.song.bpm) {
       const r = (cur.song.bpm * cur.rate) / deck.song.bpm;
       const candidates = [r, r / 2, r * 2];
@@ -296,11 +341,10 @@ export class MixerEngine implements Engine {
       cur.gain.gain.cancelScheduledValues(when);
       cur.gain.gain.setValueAtTime(1, swap);
       cur.gain.gain.linearRampToValueAtTime(0, end);
-      cur.source.onEnded = null;
       try {
         cur.source.stop(end + 0.1);
       } catch {}
-      setTimeout(() => this.decoding.delete(cur.song.songId), (end - when + 2) * 1000);
+      this.retire(cur, end - this.ctx.currentTime + 0.2);
     }
     this.current = deck;
     this.paused = false;
@@ -318,6 +362,8 @@ export class MixerEngine implements Engine {
     this.announce(deck.song);
     for (const cb of this.trackCbs) cb({ from, to: deck.song.songId, reason });
     const after = this.queue[this.queue.findIndex((s) => s.songId === deck.song.songId) + 1];
+    // Decode the following song once the outgoing deck has stopped, never in the middle of a mix.
+    this.mixingUntil = end;
     if (after) void this.prepareNext(after);
   }
 
@@ -356,7 +402,6 @@ export class MixerEngine implements Engine {
     const fresh = this.ctx.createBufferSource({ pitchCorrection: true });
     fresh.buffer = cur.buffer;
     fresh.connect(cur.gain);
-    cur.source.onEnded = null;
     try {
       cur.source.stop();
     } catch {}
