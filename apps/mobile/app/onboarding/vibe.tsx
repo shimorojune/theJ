@@ -13,7 +13,10 @@ export default function StartVibe() {
 
   const go = async () => {
     const vibe = VIBES.find((v) => v.id === picked)?.vibe ?? { energy: 0.5, valence: 0.5 };
-    const languages = (params.languages ?? "en,hi").split(",") as ("en" | "hi")[];
+    // Onboarding passes the languages just picked; otherwise the server uses the saved preference.
+    const languages = params.languages
+      ? (params.languages.split(",") as ("en" | "hi")[])
+      : undefined;
     await start(languages, vibe);
     router.replace("/player");
   };

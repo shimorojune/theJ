@@ -36,7 +36,7 @@ type Party = {
   engine: "mixer" | "expo";
   starting: boolean;
   error: string | null;
-  start: (languages: ("en" | "hi")[], vibe: Vibe) => Promise<void>;
+  start: (languages: ("en" | "hi")[] | undefined, vibe: Vibe) => Promise<void>;
   press: (button: Button, now: boolean) => Promise<void>;
   /** The mood pad: an absolute goal. */
   setVibe: (vibe: Vibe, now: boolean) => Promise<void>;
@@ -174,7 +174,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   }, [isSignedIn, api, apply]);
 
   const start = useCallback(
-    async (languages: ("en" | "hi")[], vibe: Vibe) => {
+    async (languages: ("en" | "hi")[] | undefined, vibe: Vibe) => {
       setStarting(true);
       setError(null);
       try {
