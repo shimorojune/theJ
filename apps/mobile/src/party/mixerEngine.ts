@@ -1,3 +1,4 @@
+import { AppState } from "react-native";
 import {
   type AudioBuffer,
   type AudioBufferSourceNode,
@@ -76,8 +77,9 @@ export class MixerEngine implements Engine {
   private queue: Song[] = [];
   /** Decoded audio by `kind:songId`. */
   private decoding = new Map<string, Promise<AudioBuffer>>();
-  private mixTimer: ReturnType<typeof setTimeout> | undefined;
-  private tick: ReturnType<typeof setInterval> | undefined;
+  /** Cancels the armed mix. */
+  private mixTimer: (() => void) | undefined;
+  private tick: (() => void) | undefined;
   private paused = false;
   private pausedAt = 0;
   private repeat = false;
@@ -92,10 +94,22 @@ export class MixerEngine implements Engine {
    */
   private endedDecks = new Map<number, Deck>();
   private endedSeq = 0;
+  /**
+   * Timers on the audio clock, by id. Android stops JS timers while the app is in the
+   * background, so mixes never fired and retired decks (and their audio) were never let go
+   * with the screen off. A silent source stopped at the due time still sends its native
+   * "ended" event; as with decks, the listener holds only an id.
+   */
+  private clockTimers = new Map<number, () => void>();
+  private clockSeq = 0;
+  private silent: GainNode;
 
   constructor() {
     this.master = this.ctx.createGain();
     this.master.connect(this.ctx.destination);
+    this.silent = this.ctx.createGain();
+    this.silent.gain.value = 0;
+    this.silent.connect(this.ctx.destination);
     AudioManager.setAudioSessionOptions({ iosCategory: "playback", iosMode: "default" });
     void AudioManager.setAudioSessionActivity(true);
     void AudioManager.requestNotificationPermissions().catch(() => {});
@@ -107,7 +121,55 @@ export class MixerEngine implements Engine {
       ),
     ];
     for (const sub of subs) if (sub) this.subs.push(sub);
-    this.tick = setInterval(() => this.emitStatus(), 500);
+    // Twice a second for the screen; every few seconds in the background, where only the
+    // preview fallback needs it.
+    const loop = () => {
+      this.emitStatus();
+      const away = AppState.currentState === "background";
+      this.tick = this.later(loop, away ? 4 : 0.5, away);
+    };
+    loop();
+  }
+
+  /**
+   * Run `fn` in `s` seconds, on a JS timer and (with `clock`) on the audio clock as well,
+   * whichever comes first: the JS timer covers a paused (suspended) context, the clock covers
+   * the background. Returns a cancel.
+   */
+  private later(fn: () => void, s: number, clock = true): () => void {
+    let src: ReturnType<AudioContext["createConstantSource"]> | null = null;
+    const id = ++this.clockSeq;
+    const stop = () => {
+      clearTimeout(t);
+      this.clockTimers.delete(id);
+      if (!src) return;
+      try {
+        src.onEnded = null;
+        src.disconnect();
+      } catch {}
+      src = null;
+    };
+    const run = () => {
+      if (!this.clockTimers.has(id)) return;
+      stop();
+      fn();
+    };
+    this.clockTimers.set(id, run);
+    const t = setTimeout(run, Math.max(0, s) * 1000);
+    if (clock) {
+      try {
+        src = this.ctx.createConstantSource();
+        src.offset.value = 0;
+        src.connect(this.silent);
+        src.onEnded = () => this.clockTimers.get(id)?.();
+        const now = this.ctx.currentTime;
+        src.start(now);
+        src.stop(now + Math.max(0.01, s));
+      } catch {
+        src = null;
+      }
+    }
+    return stop;
   }
 
   // --- queue ---
@@ -153,7 +215,7 @@ export class MixerEngine implements Engine {
       const ready = this.nextDeck?.song.songId === after.songId ? this.nextDeck : null;
       if (this.nextDeck && !ready) this.retire(this.nextDeck);
       this.nextDeck = null;
-      clearTimeout(this.mixTimer);
+      this.mixTimer?.();
       const deck = ready ?? (await this.makeDeck(after).catch(() => null));
       if (!deck) return;
       const quick = reason === "skip";
@@ -235,7 +297,7 @@ export class MixerEngine implements Engine {
         v.source.stop(at);
       } catch {}
     }
-    setTimeout(
+    this.later(
       () => {
         for (const v of voices) {
           releaseSource(v.source);
@@ -244,7 +306,7 @@ export class MixerEngine implements Engine {
           } catch {}
         }
       },
-      Math.max(0, at - this.ctx.currentTime) * 1000 + 250,
+      Math.max(0, at - this.ctx.currentTime) + 0.25,
     );
   }
 
@@ -320,21 +382,18 @@ export class MixerEngine implements Engine {
 
   /** Unhook a deck that has stopped (or never started) so its nodes and buffer can go. */
   private retire(deck: Deck, afterS = 0) {
-    setTimeout(
-      () => {
-        if (this.current === deck || this.nextDeck === deck) return;
-        if (deck.endedId) this.endedDecks.delete(deck.endedId);
-        releaseSource(deck.source);
-        for (const n of [deck.filter, deck.gain]) {
-          try {
-            n.disconnect();
-          } catch {}
-        }
-        if (this.current?.song.songId !== deck.song.songId || this.current.kind !== deck.kind)
-          this.forget(deck);
-      },
-      Math.max(0, afterS) * 1000 + 250,
-    );
+    this.later(() => {
+      if (this.current === deck || this.nextDeck === deck) return;
+      if (deck.endedId) this.endedDecks.delete(deck.endedId);
+      releaseSource(deck.source);
+      for (const n of [deck.filter, deck.gain]) {
+        try {
+          n.disconnect();
+        } catch {}
+      }
+      if (this.current?.song.songId !== deck.song.songId || this.current.kind !== deck.kind)
+        this.forget(deck);
+    }, Math.max(0, afterS) + 0.25);
   }
 
   private stopDeck(deck: Deck | null, fadeS: number) {
@@ -359,7 +418,7 @@ export class MixerEngine implements Engine {
     if (this.preparing === song.songId) return;
     this.preparing = song.songId;
     const wait = this.mixingUntil - this.ctx.currentTime;
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait * 1000 + 500));
+    if (wait > 0) await new Promise<void>((r) => this.later(r, wait + 0.5));
     let deck: Deck;
     try {
       deck = await this.makeDeck(song, kind);
@@ -379,7 +438,7 @@ export class MixerEngine implements Engine {
       this.retire(this.nextDeck);
       this.nextDeck = null;
     }
-    clearTimeout(this.mixTimer);
+    this.mixTimer?.();
     this.mixTimer = undefined;
   }
 
@@ -508,7 +567,7 @@ export class MixerEngine implements Engine {
 
   /** Arm a timer for the current song's mix-out point once the next deck is decoded. */
   private scheduleMix() {
-    clearTimeout(this.mixTimer);
+    this.mixTimer?.();
     const cur = this.current;
     const nxt = this.nextDeck;
     if (!cur || !nxt || this.paused || this.repeat) return;
@@ -523,13 +582,13 @@ export class MixerEngine implements Engine {
       0.2,
       (mixOut - this.position(cur)) / this.rateAt(cur, this.ctx.currentTime) - beat - 0.4,
     );
-    this.mixTimer = setTimeout(() => {
+    this.mixTimer = this.later(() => {
       if (this.current !== cur || this.nextDeck !== nxt) return;
       this.nextDeck = null;
       // Exactly the mix-out beat, or the next bar if we are late.
       const when = this.onGrid(cur, this.ctx.currentTime + beat + 0.05, 4);
       this.mixInto(nxt, when, MIX, "complete");
-    }, inS * 1000);
+    }, inS);
   }
 
   /**
@@ -745,7 +804,7 @@ export class MixerEngine implements Engine {
     if (this.paused || !this.current) return;
     this.pausedAt = this.position(this.current);
     this.paused = true;
-    clearTimeout(this.mixTimer);
+    this.mixTimer?.();
     void this.ctx.suspend();
     this.announce(this.current.song);
   }
@@ -760,7 +819,7 @@ export class MixerEngine implements Engine {
     try {
       old.stop();
     } catch {}
-    setTimeout(() => releaseSource(old), 250);
+    this.later(() => releaseSource(old), 0.25, false);
     cur.source = fresh;
     cur.started = false;
     this.startDeck(cur, this.ctx.currentTime + 0.02, Math.max(0, seconds), 1);
@@ -778,18 +837,18 @@ export class MixerEngine implements Engine {
     if (this.current) {
       this.current.source.loop = on;
     }
-    if (on) clearTimeout(this.mixTimer);
+    if (on) this.mixTimer?.();
     else this.scheduleMix();
   }
   clear() {
-    clearTimeout(this.mixTimer);
+    this.mixTimer?.();
     this.stopDeck(this.current, 0.2);
     this.cancelNext();
     this.current = null;
     this.queue = [];
   }
   destroy() {
-    clearInterval(this.tick);
+    this.tick?.();
     this.clear();
     for (const s of this.subs) s.remove();
     void this.ctx.close();
