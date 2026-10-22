@@ -195,6 +195,7 @@ def lag_ms(ea, eb, beat_s):
 # GRID = "global": the song-wide bpm from its first mix beat (the phone today).
 # GRID = "local": a straight line fitted through the analysed beats of the mix window.
 # GRID = "fitted": a grid fitted to the song's own onsets over the mix window.
+# GRID = "server": the analyser's fitted grid as served to the phone (mixInBeatS/mixOutBeatS).
 GRID = "fitted"
 WINDOW_BEATS = MIX_IN_BEATS + MIX_OUT_BEATS
 
@@ -240,6 +241,9 @@ def local_grid(song, t0):
         return t0, 60 / song["bpm"]
     if GRID == "fitted":
         return fitted_grid(song, t0)
+    if GRID == "server":  # what the phone uses: the analyser's fitted beat at each mix point
+        fitted = song.get("mixOutBeatS") if t0 == song["mixOutS"] else song.get("mixInBeatS")
+        return t0, fitted or 60 / song["bpm"]
     beats = np.array(song["beats"])
     i = int(np.argmin(abs(beats - t0)))
     w = beats[i : i + WINDOW_BEATS + 1]
@@ -353,7 +357,7 @@ def main():
     bn.add_argument("--seed", type=int, default=7)
     bn.add_argument("--matchable", action="store_true", help="every pair close enough in tempo to beat-match")
     for p in (r, bn):
-        p.add_argument("--grid", choices=["fitted", "local", "global"], default="fitted")
+        p.add_argument("--grid", choices=["server", "fitted", "local", "global"], default="server")
     args = ap.parse_args()
     global GRID
     GRID = getattr(args, "grid", GRID)
