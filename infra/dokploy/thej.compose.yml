@@ -16,6 +16,7 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://thej.rraj.dev}
       STREAM_DIR: /data/stream
       NODE_ENV: production
+    volumes:
       - stream-data:/data/stream
     depends_on: &after-migrate
       migrate: { condition: service_completed_successfully }
