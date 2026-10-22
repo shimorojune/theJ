@@ -29,7 +29,11 @@ export function createQueues(connection: Redis) {
     plan,
     stream,
     enqueueStream: (songId: string, priority: number = PRIORITY.playSoon) =>
-      stream.add("stream", { songId }, { ...once(`stream-${songId.replace(/:/g, "_")}`), attempts: 2, priority }),
+      stream.add(
+        "stream",
+        { songId },
+        { ...once(`stream-${songId.replace(/:/g, "_")}`), attempts: 2, priority },
+      ),
     enqueueFetch: (videoId: string, priority: number = PRIORITY.pool) =>
       fetch.add("fetch", { videoId }, { ...once(videoId), priority }),
     enqueueAnalyse: (videoId: string) => analyse.add("analyse", { videoId }, once(videoId)),
