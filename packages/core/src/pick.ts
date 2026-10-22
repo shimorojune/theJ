@@ -142,12 +142,19 @@ async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
   const readyBonus = ctx.preferReady ? 0.02 : 0;
   const langs = textArray(allowedLanguages(ctx.languages));
   const artists = textArray((ctx.artists ?? []).map((a) => `%${a}%`));
+  // An HNSW scan hands back its first ef_search (40) neighbours and only then filters, so a
+  // language or exclusion filter could leave nothing. Keep scanning until the limit is met
+  // (pgvector 0.8 iterative scan); set_config is local to the surrounding transaction.
+  await db.execute(
+    sql`select set_config('hnsw.iterative_scan', 'relaxed_order', true), set_config('hnsw.ef_search', '200', true)`,
+  );
   const rows = await db.execute<Candidate>(sql`
     with pool as (
       (select s.id from songs s
        where s.embedding is not null
          and s.unavailable_at is null
          and not s.junk
+         and not thej_is_cover(s.title, s.artist)
          and (${songLanguages} && ${langs} or (${unknownLanguage} and ${songLanguages} = '{}'))
          and not (s.id = any(${textArray(ctx.exclude)}))
        order by s.embedding <=> ${v}::vector
@@ -159,6 +166,7 @@ async function candidates(db: Db, ctx: PickContext, unknownLanguage: boolean) {
          and lower(s.artist) like any(${artists})
          and s.unavailable_at is null
          and not s.junk
+         and not thej_is_cover(s.title, s.artist)
          and not (s.id = any(${textArray(ctx.exclude)}))
        order by s.source_count desc
        limit 100)

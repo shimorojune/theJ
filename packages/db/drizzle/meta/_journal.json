@@ -71,6 +71,13 @@
       "when": 1792675890096,
       "tag": "0009_certain_mimic",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792680398382,
+      "tag": "0010_covers",
+      "breakpoints": true
     }
   ]
 }
