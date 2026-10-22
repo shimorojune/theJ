@@ -17,6 +17,16 @@ import type { Queue, Song } from "../lib/types";
 import type { Engine, EngineStatus } from "./engine";
 
 const SESSION_KEY = "thej.session";
+const LABEL_KEY = "thej.label";
+
+/** What a mood start needs: a name to show, a starting vibe, and words for the search. */
+export type MoodStart = {
+  label: string;
+  vibe: Vibe;
+  moodText?: string;
+  /** Onboarding passes the languages just picked; otherwise the server uses the saved ones. */
+  languages?: ("en" | "hi")[];
+};
 
 /** EXPO_PUBLIC_ENGINE=mixer uses the two-deck mixer (react-native-audio-api); default is expo-audio. */
 const ENGINE = process.env.EXPO_PUBLIC_ENGINE === "mixer" ? "mixer" : "expo";
@@ -36,10 +46,10 @@ type Party = {
   engine: "mixer" | "expo";
   starting: boolean;
   error: string | null;
-  start: (languages: ("en" | "hi")[] | undefined, vibe: Vibe) => Promise<void>;
+  /** The name of the mood playing, for the player header. */
+  label: string | null;
+  start: (mood: MoodStart) => Promise<void>;
   press: (button: Button, now: boolean) => Promise<void>;
-  /** The mood pad: an absolute goal. */
-  setVibe: (vibe: Vibe, now: boolean) => Promise<void>;
   skip: () => void;
   /** Jump to the next song because the user chose it (not a dislike). */
   jumpNext: () => void;
@@ -82,10 +92,14 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repeat, setRepeat] = useState(false);
+  const [label, setLabel] = useState<string | null>(null);
   const songs = useRef(new Map<string, Song>());
   const sessionId = queue?.sessionId;
   const sessionRef = useRef<string | undefined>(undefined);
   sessionRef.current = sessionId;
+
+  /** "Mix it in now" picked this song; the mix starts the moment its audio is playable. */
+  const pendingSkip = useRef<string | null>(null);
 
   /** Hand the server's queue to the engine; only songs whose audio is pulled are playable. */
   const apply = useCallback((q: Queue) => {
@@ -93,7 +107,13 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     setQueue((prev) => ({ ...q, upcoming: q.upcoming ?? prev?.upcoming }));
     const playable = q.committed.filter((s) => s.ready !== false);
     engine.current?.setQueue(playable);
-    if (q.skipTo && playable[1]?.songId === q.skipTo) engine.current?.next("complete");
+    if (q.skipTo) pendingSkip.current = q.skipTo;
+    const target = pendingSkip.current;
+    if (!target) return;
+    if (playable[1]?.songId === target) {
+      pendingSkip.current = null;
+      engine.current?.next("complete");
+    } else if (!q.committed.some((s) => s.songId === target)) pendingSkip.current = null;
   }, []);
 
   const send = useCallback(
@@ -170,6 +190,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
     void (async () => {
       const id = await SecureStore.getItemAsync(SESSION_KEY);
       if (!id) return;
+      setLabel(await SecureStore.getItemAsync(LABEL_KEY));
       const res = await api.sessions[":id"].$get({ param: { id } });
       if (res.ok) apply(await ok<Queue>(res));
       else await SecureStore.deleteItemAsync(SESSION_KEY);
@@ -177,13 +198,19 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   }, [isSignedIn, api, apply]);
 
   const start = useCallback(
-    async (languages: ("en" | "hi")[] | undefined, vibe: Vibe) => {
+    async ({ label, vibe, moodText, languages }: MoodStart) => {
       setStarting(true);
       setError(null);
+      setLabel(label);
+      setQueue(null);
+      sessionRef.current = undefined;
       try {
         engine.current?.clear();
-        const q = await ok<Queue>(await api.sessions.$post({ json: { languages, vibe } }));
+        const q = await ok<Queue>(
+          await api.sessions.$post({ json: { languages, vibe, moodText } }),
+        );
         await SecureStore.setItemAsync(SESSION_KEY, q.sessionId);
+        await SecureStore.setItemAsync(LABEL_KEY, label);
         sessionRef.current = q.sessionId;
         apply(q);
       } catch (e) {
@@ -197,11 +224,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   );
 
   const control = useCallback(
-    async (
-      json:
-        | { kind: "button"; button: Button; now: boolean }
-        | { kind: "pad"; vibe: Vibe; now: boolean },
-    ) => {
+    async (json: { kind: "button"; button: Button; now: boolean }) => {
       if (!sessionId) return;
       const res = await api.sessions[":id"].control.$post({ param: { id: sessionId }, json });
       apply(await ok<Queue>(res));
@@ -210,10 +233,6 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   );
   const press = useCallback(
     (button: Button, now: boolean) => control({ kind: "button", button, now }),
-    [control],
-  );
-  const setVibe = useCallback(
-    (vibe: Vibe, now: boolean) => control({ kind: "pad", vibe, now }),
     [control],
   );
 
@@ -267,9 +286,9 @@ export function PartyProvider({ children }: { children: ReactNode }) {
         engine: ENGINE,
         starting,
         error,
+        label,
         start,
         press,
-        setVibe,
         skip,
         jumpNext,
         togglePlay,

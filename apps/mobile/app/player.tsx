@@ -8,7 +8,7 @@ import { fmtTime } from "../src/lib/types";
 import { useNowPlaying, useParty } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
 import { IconButton } from "../src/ui/kit";
-import { MoodPad } from "../src/ui/MoodPad";
+import { Nudges } from "../src/ui/Nudges";
 
 export default function Player() {
   const {
@@ -22,25 +22,67 @@ export default function Player() {
     repeat,
     toggleRepeat,
     toggleLike,
-    setVibe,
+    press,
+    label,
+    starting,
     error,
   } = useParty();
   const { now, next } = useNowPlaying();
-
-  if (!queue || !now) {
-    return (
-      <View
-        style={[st.fill, { justifyContent: "center", alignItems: "center", gap: 14, padding: 32 }]}
-      >
-        <ActivityIndicator color={c.fg} />
-        <Text style={st.sub}>
-          {queue ? "Waiting for the first songs to be ready…" : "No mood playing"}
+  const header = (
+    <View style={st.top}>
+      <IconButton name="chevron-down" label="Minimise player" onPress={() => router.back()} />
+      <View style={{ alignItems: "center", gap: 2 }}>
+        <Text style={st.djing}>DJING FOR</Text>
+        <Text style={st.party} numberOfLines={1}>
+          {label ?? "Your mood"}
         </Text>
-        {error ? <Text style={[st.sub, { color: "#F0A868" }]}>{error}</Text> : null}
-        {!queue ? (
-          <IconButton name="chevron-down" label="Back" onPress={() => router.back()} />
-        ) : null}
       </View>
+      <IconButton
+        name="ellipsis-horizontal"
+        label="Settings"
+        onPress={() => router.push("/settings")}
+      />
+    </View>
+  );
+
+  // Until the first song is in hand the player still shows its frame, never a blocking page.
+  if (!queue || !now) {
+    const first = queue?.committed[0];
+    return (
+      <LinearGradient colors={["#3A2A22", "#161210", "#0B0B0C"]} style={st.fill}>
+        <SafeAreaView style={st.fill} edges={["top", "bottom"]}>
+          <View style={st.body}>
+            {header}
+            <View style={st.artWrap}>
+              {first ? (
+                <Image
+                  source={first.thumbUrl}
+                  style={[st.art, { opacity: 0.6 }]}
+                  contentFit="cover"
+                />
+              ) : (
+                <View style={[st.art, st.artEmpty]} />
+              )}
+            </View>
+            <View style={{ gap: 6, marginTop: 22 }}>
+              <Text style={st.title} numberOfLines={1}>
+                {first?.title ?? (starting ? "Picking the first song" : "Nothing playing")}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {starting || first ? <ActivityIndicator size="small" color={c.muted} /> : null}
+                <Text style={st.artist}>
+                  {first
+                    ? `${first.artist} · cueing`
+                    : starting
+                      ? "One moment"
+                      : "Pick a mood on Home"}
+                </Text>
+              </View>
+              {error ? <Text style={[st.artist, { color: "#F0A868" }]}>{error}</Text> : null}
+            </View>
+          </View>
+        </SafeAreaView>
+      </LinearGradient>
     );
   }
 
@@ -52,18 +94,7 @@ export default function Player() {
     >
       <SafeAreaView style={st.fill} edges={["top", "bottom"]}>
         <ScrollView contentContainerStyle={st.body}>
-          <View style={st.top}>
-            <IconButton name="chevron-down" label="Minimise player" onPress={() => router.back()} />
-            <View style={{ alignItems: "center", gap: 2 }}>
-              <Text style={st.djing}>DJING FOR</Text>
-              <Text style={st.party}>Your mood</Text>
-            </View>
-            <IconButton
-              name="ellipsis-horizontal"
-              label="Settings"
-              onPress={() => router.push("/settings")}
-            />
-          </View>
+          {header}
 
           <View style={st.artWrap}>
             <Image
@@ -167,7 +198,7 @@ export default function Player() {
           ) : null}
 
           <View style={{ marginTop: 10 }}>
-            <MoodPad queue={queue} onChange={(v, n) => void setVibe(v, n)} />
+            <Nudges queue={queue} onPress={(b, n) => void press(b, n).catch(() => {})} />
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -190,10 +221,10 @@ const st = StyleSheet.create({
   party: { color: c.fg, fontSize: 13, fontWeight: "600" },
   artWrap: { alignItems: "center", marginTop: 14 },
   art: { width: "100%", aspectRatio: 1, maxWidth: 340, borderRadius: 8 },
+  artEmpty: { backgroundColor: "rgba(255,255,255,0.06)" },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 22 },
   title: { color: c.fg, fontSize: 22, fontWeight: "600", letterSpacing: -0.3 },
   artist: { color: c.warm, fontSize: 15 },
-  sub: { color: c.muted, fontSize: 14, textAlign: "center" },
   pill: {
     height: 26,
     paddingHorizontal: 10,

@@ -15,10 +15,7 @@ export default function Languages() {
     setBusy(true);
     try {
       await save({ languages: toLanguages(choice), mixRatio: hiShare });
-      router.push({
-        pathname: "/onboarding/vibe",
-        params: { languages: toLanguages(choice).join(",") },
-      });
+      router.replace("/home");
     } finally {
       setBusy(false);
     }
@@ -26,7 +23,7 @@ export default function Languages() {
 
   return (
     <Screen>
-      <StepBar step={1} of={2} />
+      <StepBar step={1} of={1} />
       <View style={{ gap: 10, marginTop: 28, marginBottom: 28 }}>
         <Text style={s.h1}>What should the DJ play?</Text>
         <Text style={s.lede}>This shapes every set. You can change it any time in Settings.</Text>

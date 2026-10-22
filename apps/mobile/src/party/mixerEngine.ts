@@ -19,6 +19,8 @@ const PRELOAD_AHEAD_S = 90;
 const MIX = { in: 16, out: 8 };
 /** A skip is the same move, just fast. */
 const SKIP = { in: 2, out: 2 };
+/** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
+const NOW = { in: 8, out: 4 };
 const MAX_TEMPO_STRETCH = 0.08;
 /** The bass shelf each deck has: cut while a song is coming in, open once it owns the floor. */
 const BASS_HZ = 180;
@@ -104,11 +106,14 @@ export class MixerEngine implements Engine {
       : this.queue[0];
     if (!after) return;
     void (async () => {
-      const deck =
-        this.nextDeck?.song.songId === after.songId ? this.nextDeck : await this.makeDeck(after);
+      const ready = this.nextDeck?.song.songId === after.songId ? this.nextDeck : null;
+      if (this.nextDeck && !ready) this.retire(this.nextDeck);
       this.nextDeck = null;
-      const when = this.onGrid(this.current, this.ctx.currentTime + 0.05, 1);
-      this.mixInto(deck, when, SKIP, reason);
+      clearTimeout(this.mixTimer);
+      const deck = ready ?? (await this.makeDeck(after));
+      const quick = reason === "skip";
+      const when = this.onGrid(this.current, this.ctx.currentTime + 0.05, quick ? 1 : 4);
+      this.mixInto(deck, when, quick ? SKIP : NOW, reason);
     })();
   }
 
@@ -304,15 +309,6 @@ export class MixerEngine implements Engine {
     const cur = this.current;
     const from = cur?.song.songId ?? null;
     let rate = 1;
-    console.log(
-      "[mixer] mixInto",
-      deck.song.songId,
-      reason,
-      "at",
-      when.toFixed(2),
-      "now",
-      this.ctx.currentTime.toFixed(2),
-    );
     if (cur?.song.bpm && deck.song.bpm) {
       const r = (cur.song.bpm * cur.rate) / deck.song.bpm;
       const candidates = [r, r / 2, r * 2];
