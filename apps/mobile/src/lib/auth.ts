@@ -1,5 +1,5 @@
 import { useAuth, useUser } from "@clerk/expo";
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 /**
  * Set EXPO_PUBLIC_DEV_USER to skip Clerk. A local api accepts it with DEV_AUTH=1; a deployed one
@@ -30,10 +30,11 @@ export type SessionInfo = {
 export function useSession(): SessionInfo {
   const auth = useAuth();
   const { user } = useUser();
-  const getToken = useCallback(
-    () => (DEV_USER ? Promise.resolve(null) : auth.getToken()),
-    [auth.getToken],
-  );
+  // Clerk hands out a new getToken on every render; a stable wrapper keeps the api client, and
+  // everything that depends on it, from being rebuilt each render (which looped the session fetch).
+  const latest = useRef(auth.getToken);
+  latest.current = auth.getToken;
+  const getToken = useCallback(() => (DEV_USER ? Promise.resolve(null) : latest.current()), []);
   if (DEV_USER) {
     return {
       isLoaded: true,
