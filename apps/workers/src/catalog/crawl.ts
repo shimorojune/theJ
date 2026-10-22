@@ -127,10 +127,15 @@ async function report() {
   log(`catalog: ${JSON.stringify(c)} languages: ${JSON.stringify(langs)}`);
 }
 
+// Embedding is cheap and sessions need it, so it runs first (whatever earlier runs left behind),
+// after each crawl, and again after tags land. A redeploy mid-crawl then never leaves the
+// catalogue unusable.
+const embed = async () => log(`embedded ${await embedPending(log)} songs`);
+if (what === "all") await embed();
 if (what === "deezer" || what === "all") await crawlDeezer();
+if (what === "all") await embed();
 if (what === "ytmusic" || what === "all") await crawlYtMusic();
-// Embed before tagging so sessions work within minutes; re-embed after tags land.
-if (what === "embed" || what === "all") log(`embedded ${await embedPending(log)} songs`);
+if (what === "embed" || what === "all") await embed();
 if (what === "tag" || what === "all") {
   if (process.env.OPENROUTER_API_KEY) {
     log(`tagged ${await tagUntagged(Infinity, log)} songs`);
