@@ -210,6 +210,7 @@ export async function previewPlan(db: Db, sessionId: string, n = 10): Promise<So
     const out: string[] = [];
     let target = s.target as Vibe;
     let tempo = ctx.currentTempo;
+    let key = ctx.currentKey;
     for (let i = 0; i < n; i++) {
       target = stepToward(target, s.goal as Vibe);
       const [best] = await pickCandidates(tx as unknown as Db, {
@@ -217,12 +218,14 @@ export async function previewPlan(db: Db, sessionId: string, n = 10): Promise<So
         energy: target.energy,
         valence: target.valence,
         currentTempo: tempo,
+        currentKey: key,
         exclude: [...ctx.exclude, ...out],
         limit: 1,
       });
       if (!best) break;
       out.push(best.id);
       tempo = best.tempo;
+      key = best;
     }
     return songsInOrder(tx, out);
   });
@@ -326,6 +329,7 @@ async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): P
     let position = Number(max);
     let target = s.target as Vibe;
     let tempo = ctx.currentTempo;
+    let key = ctx.currentKey;
     const picked: string[] = [];
     for (let i = 0; i < missing; i++) {
       // The first pick is what plays next; prefer songs whose audio is already here.
@@ -335,6 +339,7 @@ async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): P
         energy: target.energy,
         valence: target.valence,
         currentTempo: tempo,
+        currentKey: key,
         exclude: [...ctx.exclude, ...picked],
         preferReady,
         limit: 20,
@@ -349,6 +354,7 @@ async function fill(tx: Tx, s: Session, opts: { preferReady?: boolean } = {}): P
         .values({ sessionId: s.id, position, songId: best.id, state: "committed" });
       target = stepToward(target, s.goal as Vibe);
       tempo = best.tempo;
+      key = best;
     }
   }
   return state(tx, s);
@@ -421,7 +427,7 @@ async function context(tx: Tx, s: Session) {
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
   const dayAgo = new Date(Date.now() - 86_400_000);
 
-  const [sessionItems, heard, liked, current] = await Promise.all([
+  const [sessionItems, heard, liked, last] = await Promise.all([
     // Queued in any of this user's moods today, played or not: a restarted mood opens differently.
     tx
       .select({ songId: queueItems.songId })
@@ -446,17 +452,25 @@ async function context(tx: Tx, s: Session) {
         ),
       ),
     likedIds(tx, s.userId),
-    committedItems(tx, s.id).then((items) => items[0]),
+    // New picks follow the last committed song, not the one playing now.
+    committedItems(tx, s.id).then((items) => items.at(-1)),
   ]);
 
   let currentTempo: number | null = null;
-  if (current?.songId) {
+  let currentKey: { key: string | null; scale: string | null } | null = null;
+  if (last?.songId) {
     const [row] = await tx
-      .select({ tempo: songs.tempo, bpm: audioCache.bpm })
+      .select({
+        tempo: songs.tempo,
+        bpm: audioCache.bpm,
+        key: sql<string | null>`coalesce(${audioCache.key}, ${songs.key})`,
+        scale: sql<string | null>`coalesce(${audioCache.scale}, ${songs.scale})`,
+      })
       .from(songs)
       .leftJoin(audioCache, eq(audioCache.songId, songs.id))
-      .where(eq(songs.id, current.songId));
+      .where(eq(songs.id, last.songId));
     currentTempo = row?.bpm ?? row?.tempo ?? null;
+    currentKey = row ? { key: row.key, scale: row.scale } : null;
   }
 
   // Liked songs come back after a week, so favourites return without the set going stale.
@@ -473,5 +487,6 @@ async function context(tx: Tx, s: Session) {
     exclude: [...exclude],
     liked: [...liked],
     currentTempo,
+    currentKey,
   };
 }
