@@ -44,6 +44,8 @@ type Deck = {
   startedAt: number;
   offset: number;
   rate: number;
+  /** After a mix, `rate` eases linearly to 1 over `dur` seconds starting at context time `at`. */
+  ramp?: { at: number; dur: number };
   started: boolean;
 };
 
@@ -215,6 +217,7 @@ export class MixerEngine implements Engine {
     deck.startedAt = when;
     deck.offset = offset;
     deck.rate = rate;
+    deck.ramp = undefined;
     deck.started = true;
     deck.source.onEnded = () => {
       if (this.current === deck && !this.repeat) this.onCurrentEnded(deck);
@@ -341,26 +344,48 @@ export class MixerEngine implements Engine {
     return deck.song.mixOutS ?? deck.buffer.duration - 8;
   }
 
-  /** Position of `deck` at context time `t`, while its rate holds. */
+  /** Position of `deck` at context time `t`, following the tempo ease-back after a mix. */
   private positionAt(deck: Deck, t: number): number {
-    return deck.offset + (t - deck.startedAt) * deck.rate;
+    const r = deck.rate;
+    const ramp = deck.ramp;
+    if (!ramp || t <= ramp.at) return deck.offset + (t - deck.startedAt) * r;
+    const u = Math.min(t - ramp.at, ramp.dur);
+    return (
+      deck.offset +
+      (ramp.at - deck.startedAt) * r +
+      r * u +
+      ((1 - r) * u * u) / (2 * ramp.dur) +
+      Math.max(0, t - ramp.at - ramp.dur)
+    );
+  }
+
+  /** Playback rate of `deck` at context time `t`. */
+  private rateAt(deck: Deck, t: number): number {
+    const ramp = deck.ramp;
+    if (!ramp || t <= ramp.at) return deck.rate;
+    const u = Math.min(1, (t - ramp.at) / ramp.dur);
+    return deck.rate + (1 - deck.rate) * u;
   }
 
   /** Position of the current deck in its song, in seconds. */
   private position(deck: Deck): number {
     if (this.paused) return this.pausedAt;
-    return deck.offset + (this.ctx.currentTime - deck.startedAt) * deck.rate;
+    return this.positionAt(deck, this.ctx.currentTime);
   }
 
-  /** Context time at which `deck` plays second `t` of its song (while its rate holds). */
+  /**
+   * Context time at which `deck` plays second `t` of its song, assuming its current rate holds
+   * from now on (true once any ease-back has finished, which it has long before a mix-out).
+   */
   private atSongTime(deck: Deck, t: number): number {
-    return deck.startedAt + (t - deck.offset) / deck.rate;
+    const now = this.ctx.currentTime;
+    return now + (t - this.positionAt(deck, now)) / this.rateAt(deck, now);
   }
 
   /** One beat of `deck` in context seconds. */
   private beatSeconds(deck: Deck | null, fallback: Song): number {
     const bpm = deck?.song.bpm || fallback.bpm || 100;
-    return 60 / bpm / (deck?.rate ?? 1);
+    return 60 / bpm / (deck ? this.rateAt(deck, this.ctx.currentTime) : 1);
   }
 
   /**
@@ -382,7 +407,10 @@ export class MixerEngine implements Engine {
     const nxt = this.nextDeck;
     if (!cur || !nxt || this.paused || this.repeat) return;
     const mixOut = this.mixOutOf(cur);
-    const inS = Math.max(0.2, (mixOut - this.position(cur)) / cur.rate - 0.3);
+    const inS = Math.max(
+      0.2,
+      (mixOut - this.position(cur)) / this.rateAt(cur, this.ctx.currentTime) - 0.3,
+    );
     this.mixTimer = setTimeout(() => {
       if (this.current !== cur || this.nextDeck !== nxt) return;
       this.nextDeck = null;
@@ -407,7 +435,7 @@ export class MixerEngine implements Engine {
     let rate = 1;
     // Tempo matching needs both beat grids: previews have none.
     if (cur?.kind === "full" && deck.kind === "full" && cur.song.bpm && deck.song.bpm) {
-      const r = (cur.song.bpm * cur.rate) / deck.song.bpm;
+      const r = (cur.song.bpm * this.rateAt(cur, when)) / deck.song.bpm;
       const candidates = [r, r / 2, r * 2];
       const best = candidates.reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p), r);
       if (Math.abs(best - 1) <= MAX_TEMPO_STRETCH) rate = best;
@@ -427,6 +455,7 @@ export class MixerEngine implements Engine {
     if (rate !== 1) {
       deck.source.playbackRate.setValueAtTime(rate, end);
       deck.source.playbackRate.linearRampToValueAtTime(1, end + 20);
+      deck.ramp = { at: end, dur: 20 };
     }
     if (cur) {
       cur.filter.gain.setValueAtTime(0, swap);
@@ -441,17 +470,6 @@ export class MixerEngine implements Engine {
     }
     this.current = deck;
     this.paused = false;
-    // Rate drifts back to 1 after the mix; track it for position maths.
-    setTimeout(
-      () => {
-        if (this.current === deck) {
-          deck.offset = this.position(deck);
-          deck.startedAt = this.ctx.currentTime;
-          deck.rate = 1;
-        }
-      },
-      (end - this.ctx.currentTime + 20) * 1000,
-    );
     this.announce(deck.song);
     for (const cb of this.trackCbs) cb({ from, to: deck.song.songId, reason });
     const after = this.queue[this.queue.findIndex((s) => s.songId === deck.song.songId) + 1];
@@ -473,7 +491,9 @@ export class MixerEngine implements Engine {
     if (!this.paused) return;
     this.paused = false;
     void this.ctx.resume();
-    if (this.current) {
+    // The context clock stood still while suspended, so the deck's anchors (and any tempo
+    // ease-back in progress) still hold; re-anchor only a deck at its plain rate.
+    if (this.current && !this.current.ramp) {
       this.current.startedAt = this.ctx.currentTime;
       this.current.offset = this.pausedAt;
     }
