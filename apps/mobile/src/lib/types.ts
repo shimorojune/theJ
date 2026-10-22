@@ -12,6 +12,10 @@ export type Song = {
   bpm?: number | null;
   mixInS?: number | null;
   mixOutS?: number | null;
+  /** 30-second store preview to start on while the full audio is pulled. */
+  previewUrl?: string | null;
+  /** Where that preview sits inside the full audio, once the full song is pulled. */
+  previewOffsetS?: number | null;
   energy: number | null;
   valence: number | null;
   tempo: number | null;

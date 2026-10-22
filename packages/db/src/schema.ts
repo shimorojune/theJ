@@ -227,6 +227,13 @@ export const audioCache = pgTable(
     /** Where the next song should start coming in, and where this one can be faded out. */
     mixInS: real("mix_in_s"),
     mixOutS: real("mix_out_s"),
+    /**
+     * Where the 30-second store preview sits inside this audio, so the phone can start on the
+     * preview and swap to the full song at the same moment. Null when the match was weak.
+     */
+    previewOffsetS: real("preview_offset_s"),
+    /** Normalised correlation of that match, 0 to 1. */
+    previewMatch: real("preview_match"),
     readyAt: timestamp("ready_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
     /** Warm-set songs survive the cleanup sweep. */

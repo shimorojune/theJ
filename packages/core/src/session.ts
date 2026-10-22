@@ -4,6 +4,7 @@ import { applyButton, type Button, stepToward, type Vibe } from "@thej/shared";
 import { and, asc, desc, eq, gt, gte, inArray, isNotNull, or, sql } from "drizzle-orm";
 import { embedText } from "./embed";
 import { choose, pickCandidates } from "./pick";
+import { mayHavePreview } from "./preview";
 
 /** The phone holds the current song plus the next 2. */
 const COMMITTED = 3;
@@ -20,6 +21,9 @@ export type QueuedSong = Song & {
   mixInS: number | null;
   mixOutS: number | null;
   audioDurationS: number | null;
+  /** The song has a store preview the phone can start on before the full audio is pulled. */
+  hasPreview: boolean;
+  previewOffsetS: number | null;
 };
 
 export type QueueState = {
@@ -369,6 +373,8 @@ async function state(tx: Tx, s: Session): Promise<QueueState> {
       mixInS: cache?.mixInS ?? null,
       mixOutS: cache?.mixOutS ?? null,
       audioDurationS: cache?.durationS ?? null,
+      hasPreview: mayHavePreview(song.previewUrl),
+      previewOffsetS: cache?.previewOffsetS ?? null,
     }));
   const liked = await likedIds(tx, s.userId);
   return {

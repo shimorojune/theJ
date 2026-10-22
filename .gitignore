@@ -22,3 +22,6 @@ apps/mobile/ios/
 # local data
 .data/
 apps/api/.cli-session
+
+# local audio R&D environment
+.venv-mixlab/

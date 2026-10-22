@@ -19,6 +19,7 @@ import { z } from "zod";
 import { type AuthVars, requireAuth } from "../auth";
 import { db, publish, queues, subscribe } from "../deps";
 import { toQueueEvent, toSong } from "../present";
+import { warmPreview } from "./preview";
 
 const StartBody = z.object({
   languages: z.array(Language).min(1).optional(),
@@ -31,7 +32,11 @@ const EventBody = z.object({ songId: z.string(), event: PlayEventKind });
 export async function changed(q: QueueState) {
   const event = toQueueEvent(q);
   await publish(q.sessionId, event);
-  for (const [i, songId] of q.needsAudio.entries()) await queues.enqueueStream(songId, i + 1);
+  for (const [i, songId] of q.needsAudio.entries()) {
+    await queues.enqueueStream(songId, i + 1);
+    // Fetch the preview now, so the phone's request for it is answered from disk.
+    void warmPreview(songId).catch(() => {});
+  }
   return event;
 }
 

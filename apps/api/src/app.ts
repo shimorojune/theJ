@@ -5,6 +5,7 @@ import { logger } from "hono/logger";
 import { db, getQueue, watchStreamReady } from "./deps";
 import { audio } from "./routes/audio";
 import { me } from "./routes/me";
+import { preview } from "./routes/preview";
 import { changed, sessions } from "./routes/sessions";
 
 export const app = new Hono()
@@ -26,6 +27,7 @@ export const app = new Hono()
   .route("/me", me)
   .route("/sessions", sessions)
   .route("/audio", audio)
+  .route("/preview", preview)
   .onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
     console.error(err);

@@ -84,7 +84,9 @@ export class ExpoEngine implements Engine {
     this.lockScreenActive = true;
   }
 
-  setQueue(list: Song[]) {
+  setQueue(all: Song[]) {
+    // No preview hand-off here: only songs whose full audio is pulled.
+    const list = all.filter((s) => s.ready !== false);
     for (const s of list) this.songs.set(s.songId, s);
     const ids = list.map((s) => s.songId);
     const cur = this.playlist.currentIndex;

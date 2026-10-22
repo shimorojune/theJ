@@ -1,5 +1,6 @@
-import { copyFile, mkdir, rm, stat } from "node:fs/promises";
+import { copyFile, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { previewUrlFor } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { QUEUES, STREAM_READY_CHANNEL, type StreamJob, type StreamReady } from "@thej/shared";
 import { Worker } from "bullmq";
@@ -8,7 +9,7 @@ import { Egress } from "../fetcher/egress";
 import { downloadAudio } from "../fetcher/ytdlp";
 import { db } from "../lib/db";
 import { connection } from "../lib/redis";
-import { analyse } from "./analyse";
+import { analyse, previewOffset } from "./analyse";
 import { youtubeIdFor } from "./resolve";
 
 /** Where pulled songs live until the sweep removes them. Shared with the api as a volume. */
@@ -22,6 +23,26 @@ const egress = new Egress(
   process.env.FALLBACK_PROXY || undefined,
 );
 egress.start();
+
+/** The song's store preview, shared with the api (same path scheme as its /preview route). */
+async function previewFile(songId: string): Promise<string | null> {
+  const path = join(DIR, "previews", `${songId.replace(/[^A-Za-z0-9_-]/g, "_")}.m4a`);
+  if (
+    await stat(path)
+      .then((s) => s.size > 0)
+      .catch(() => false)
+  )
+    return path;
+  const url = await previewUrlFor(db, songId);
+  if (!url) return null;
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) return null;
+  await mkdir(join(DIR, "previews"), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, Buffer.from(await res.arrayBuffer()));
+  await rename(tmp, path);
+  return path;
+}
 
 const announce = (msg: StreamReady) =>
   connection.publish(STREAM_READY_CHANNEL, JSON.stringify(msg));
@@ -54,6 +75,10 @@ const worker = new Worker<StreamJob>(
       // Copy into the shared dir (another mount); cleanup() removes the temp dir afterwards.
       await copyFile(tmp, path);
       const a = await analyse(path);
+      // Where the preview sits in this audio, so a phone playing the preview swaps over seamlessly.
+      const pv = await previewFile(songId)
+        .then((p) => (p ? previewOffset(path, p) : null))
+        .catch(() => null);
       const { size } = await stat(path);
       await db
         .insert(audioCache)
@@ -69,6 +94,8 @@ const worker = new Worker<StreamJob>(
           scale: a.scale,
           mixInS: a.mixInS,
           mixOutS: a.mixOutS,
+          previewOffsetS: pv?.offsetS ?? null,
+          previewMatch: pv?.match ?? null,
         })
         .onConflictDoNothing();
       await db
@@ -86,6 +113,7 @@ const worker = new Worker<StreamJob>(
         bytes: size,
         bpm: a.bpm,
         key: `${a.key} ${a.scale}`,
+        preview: pv ? `${pv.offsetS ?? "no match"} (${pv.match})` : "none",
         ms: Date.now() - t0,
         via: egress.label,
       };

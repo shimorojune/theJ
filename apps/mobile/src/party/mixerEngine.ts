@@ -26,8 +26,15 @@ const MAX_TEMPO_STRETCH = 0.08;
 const BASS_HZ = 180;
 const BASS_CUT_DB = -18;
 
+/** A full song, or its 30-second store preview while the full audio is pulled. */
+type Kind = "full" | "preview";
+const kindFor = (s: Song): Kind | null => (s.ready ? "full" : s.previewUrl ? "preview" : null);
+/** A song can play right now: its audio is pulled or it has a preview. */
+export const playable = (s: Song) => kindFor(s) !== null;
+
 type Deck = {
   song: Song;
+  kind: Kind;
   buffer: AudioBuffer;
   source: AudioBufferSourceNode;
   /** Low shelf: the bass swap is what makes two beat-matched songs sound like one. */
@@ -45,6 +52,10 @@ type Deck = {
  * started on the current song's beat grid at its mix-out point, tempo-matched, bass cut; after
  * 16 beats the bass swaps and the current song drops out over 8. Then the new song's tempo eases
  * back to its own. Skips are the same move in a few beats, never silence.
+ *
+ * A song whose audio isn't pulled yet starts on its store preview; once the full audio arrives
+ * it takes over at the same point of the song (the server knows where the preview sits), so the
+ * listener never hears the switch.
  */
 export class MixerEngine implements Engine {
   private ctx = new AudioContext();
@@ -52,6 +63,7 @@ export class MixerEngine implements Engine {
   private current: Deck | null = null;
   private nextDeck: Deck | null = null;
   private queue: Song[] = [];
+  /** Decoded audio by `kind:songId`. */
   private decoding = new Map<string, Promise<AudioBuffer>>();
   private mixTimer: ReturnType<typeof setTimeout> | undefined;
   private tick: ReturnType<typeof setInterval> | undefined;
@@ -83,20 +95,28 @@ export class MixerEngine implements Engine {
 
   setQueue(list: Song[]) {
     this.queue = list;
-    const curId = this.current?.song.songId;
-    if (!curId || !list.some((s) => s.songId === curId)) {
+    const cur = this.current;
+    const i = cur ? list.findIndex((s) => s.songId === cur.song.songId) : -1;
+    if (!cur || i < 0) {
       // Nothing playing, or the server replaced the current song: start fresh from the top.
       this.stopDeck(this.current, 0.3);
       this.current = null;
       this.cancelNext();
       const first = list[0];
-      if (first) void this.playNow(first);
+      if (first && playable(first)) void this.playNow(first);
       return;
     }
-    const after = list[list.indexOf(list.find((s) => s.songId === curId) as Song) + 1];
+    const latest = list[i] as Song;
+    if (cur.kind === "preview" && latest.ready) void this.upgrade(cur, latest);
+    const after = list[i + 1];
     if (!after) return this.cancelNext();
-    if (this.nextDeck && this.nextDeck.song.songId !== after.songId) this.cancelNext();
-    if (!this.nextDeck) void this.prepareNext(after);
+    const stale =
+      this.nextDeck &&
+      (this.nextDeck.song.songId !== after.songId ||
+        (this.nextDeck.kind === "preview" && after.ready));
+    if (stale) this.cancelNext();
+    // The natural next song is prepared from its full audio; previews are a late fallback (tick).
+    if (!this.nextDeck && after.ready) void this.prepareNext(after);
   }
 
   next(reason: "skip" | "complete") {
@@ -110,7 +130,8 @@ export class MixerEngine implements Engine {
       if (this.nextDeck && !ready) this.retire(this.nextDeck);
       this.nextDeck = null;
       clearTimeout(this.mixTimer);
-      const deck = ready ?? (await this.makeDeck(after));
+      const deck = ready ?? (await this.makeDeck(after).catch(() => null));
+      if (!deck) return;
       const quick = reason === "skip";
       const when = this.onGrid(this.current, this.ctx.currentTime + 0.05, quick ? 1 : 4);
       this.mixInto(deck, when, quick ? SKIP : NOW, reason);
@@ -119,18 +140,26 @@ export class MixerEngine implements Engine {
 
   // --- decks ---
 
-  private decode(song: Song): Promise<AudioBuffer> {
-    let p = this.decoding.get(song.songId);
+  private decode(song: Song, kind: Kind): Promise<AudioBuffer> {
+    const key = `${kind}:${song.songId}`;
+    let p = this.decoding.get(key);
     if (!p) {
-      p = this.ctx.decodeAudioData(song.audioUrl);
-      this.decoding.set(song.songId, p);
-      p.catch(() => this.decoding.delete(song.songId));
+      const url = kind === "full" ? song.audioUrl : song.previewUrl;
+      if (!url) return Promise.reject(new Error(`no ${kind} audio for ${song.songId}`));
+      p = this.ctx.decodeAudioData(url);
+      this.decoding.set(key, p);
+      p.catch(() => this.decoding.delete(key));
     }
     return p;
   }
 
-  private async makeDeck(song: Song): Promise<Deck> {
-    const buffer = await this.decode(song);
+  private forget(deck: Deck) {
+    this.decoding.delete(`${deck.kind}:${deck.song.songId}`);
+  }
+
+  private async makeDeck(song: Song, kind = kindFor(song)): Promise<Deck> {
+    if (!kind) throw new Error(`${song.songId} is not playable yet`);
+    const buffer = await this.decode(song, kind);
     const source = this.ctx.createBufferSource({ pitchCorrection: true });
     source.buffer = buffer;
     const filter = this.ctx.createBiquadFilter();
@@ -143,6 +172,7 @@ export class MixerEngine implements Engine {
     gain.connect(this.master);
     return {
       song,
+      kind,
       buffer,
       source,
       filter,
@@ -162,6 +192,8 @@ export class MixerEngine implements Engine {
     let deck: Deck;
     try {
       deck = await this.makeDeck(song);
+    } catch {
+      return; // no preview after all: the full audio's arrival starts it
     } finally {
       if (this.starting === song.songId) this.starting = null;
     }
@@ -199,7 +231,8 @@ export class MixerEngine implements Engine {
             n.disconnect();
           } catch {}
         }
-        if (this.current?.song.songId !== deck.song.songId) this.decoding.delete(deck.song.songId);
+        if (this.current?.song.songId !== deck.song.songId || this.current.kind !== deck.kind)
+          this.forget(deck);
       },
       Math.max(0, afterS) * 1000 + 250,
     );
@@ -223,14 +256,16 @@ export class MixerEngine implements Engine {
   private preparing: string | null = null;
   /** Context time the current mix ends; nothing new is decoded before then. */
   private mixingUntil = 0;
-  private async prepareNext(song: Song) {
+  private async prepareNext(song: Song, kind = kindFor(song)) {
     if (this.preparing === song.songId) return;
     this.preparing = song.songId;
     const wait = this.mixingUntil - this.ctx.currentTime;
     if (wait > 0) await new Promise((r) => setTimeout(r, wait * 1000 + 500));
     let deck: Deck;
     try {
-      deck = await this.makeDeck(song);
+      deck = await this.makeDeck(song, kind);
+    } catch {
+      return;
     } finally {
       if (this.preparing === song.songId) this.preparing = null;
     }
@@ -242,14 +277,74 @@ export class MixerEngine implements Engine {
 
   private cancelNext() {
     if (this.nextDeck) {
-      this.decoding.delete(this.nextDeck.song.songId);
+      this.retire(this.nextDeck);
       this.nextDeck = null;
     }
     clearTimeout(this.mixTimer);
     this.mixTimer = undefined;
   }
 
+  /**
+   * The full audio of the song playing as a preview has arrived: start it at the matching point
+   * on the same clock and cross over in 50 ms, so nothing audible changes. Without a match, the
+   * full song comes in from its start with a short crossfade.
+   */
+  private upgrading: string | null = null;
+  private async upgrade(prev: Deck, song: Song) {
+    if (this.upgrading === song.songId) return;
+    this.upgrading = song.songId;
+    try {
+      const full = await this.makeDeck(song, "full").catch(() => null);
+      if (!full) return;
+      if (this.current !== prev || this.paused) return this.retire(full);
+      const when = this.ctx.currentTime + 0.12;
+      const exact = song.previewOffsetS != null;
+      const at = exact
+        ? (song.previewOffsetS as number) + this.positionAt(prev, when)
+        : (song.mixInS ?? 0);
+      const fade = exact ? 0.05 : 1.5;
+      full.gain.gain.setValueAtTime(0, when);
+      full.gain.gain.linearRampToValueAtTime(1, when + fade);
+      prev.gain.gain.cancelScheduledValues(when);
+      prev.gain.gain.setValueAtTime(1, when);
+      prev.gain.gain.linearRampToValueAtTime(0, when + fade);
+      try {
+        prev.source.stop(when + fade + 0.05);
+      } catch {}
+      this.startDeck(full, when, at, 1);
+      this.current = full;
+      this.retire(prev, fade + 0.3);
+      this.announce(song);
+      this.scheduleMix();
+      const after = this.queue[this.queue.findIndex((s) => s.songId === song.songId) + 1];
+      if (after?.ready && !this.nextDeck) void this.prepareNext(after);
+    } finally {
+      this.upgrading = null;
+    }
+  }
+
+  /** Twenty seconds from the mix point with the next song still not pulled: mix into its preview. */
+  private fallbackNext() {
+    const cur = this.current;
+    if (!cur || this.nextDeck || this.paused || this.repeat) return;
+    const after = this.queue[this.queue.findIndex((s) => s.songId === cur.song.songId) + 1];
+    if (!after || after.ready || !after.previewUrl) return;
+    if ((this.mixOutOf(cur) - this.position(cur)) / cur.rate < 20)
+      void this.prepareNext(after, "preview");
+  }
+
   // --- the mix ---
+
+  /** Where a deck hands over: its analysed mix-out point, or near the end of a preview. */
+  private mixOutOf(deck: Deck): number {
+    if (deck.kind === "preview") return Math.max(1, deck.buffer.duration - 6);
+    return deck.song.mixOutS ?? deck.buffer.duration - 8;
+  }
+
+  /** Position of `deck` at context time `t`, while its rate holds. */
+  private positionAt(deck: Deck, t: number): number {
+    return deck.offset + (t - deck.startedAt) * deck.rate;
+  }
 
   /** Position of the current deck in its song, in seconds. */
   private position(deck: Deck): number {
@@ -273,7 +368,8 @@ export class MixerEngine implements Engine {
    * of `beats` from its mix-out beat. Without a beat grid, `earliest` itself.
    */
   private onGrid(cur: Deck | null, earliest: number, beats: number): number {
-    if (!cur?.song.bpm || cur.song.mixOutS == null || this.paused) return earliest;
+    if (!cur || cur.kind === "preview" || !cur.song.bpm || cur.song.mixOutS == null || this.paused)
+      return earliest;
     const anchor = this.atSongTime(cur, cur.song.mixOutS);
     const period = this.beatSeconds(cur, cur.song) * beats;
     return anchor + Math.ceil((earliest - anchor) / period - 1e-6) * period;
@@ -285,7 +381,7 @@ export class MixerEngine implements Engine {
     const cur = this.current;
     const nxt = this.nextDeck;
     if (!cur || !nxt || this.paused || this.repeat) return;
-    const mixOut = cur.song.mixOutS ?? cur.buffer.duration - 8;
+    const mixOut = this.mixOutOf(cur);
     const inS = Math.max(0.2, (mixOut - this.position(cur)) / cur.rate - 0.3);
     this.mixTimer = setTimeout(() => {
       if (this.current !== cur || this.nextDeck !== nxt) return;
@@ -309,7 +405,8 @@ export class MixerEngine implements Engine {
     const cur = this.current;
     const from = cur?.song.songId ?? null;
     let rate = 1;
-    if (cur?.song.bpm && deck.song.bpm) {
+    // Tempo matching needs both beat grids: previews have none.
+    if (cur?.kind === "full" && deck.kind === "full" && cur.song.bpm && deck.song.bpm) {
       const r = (cur.song.bpm * cur.rate) / deck.song.bpm;
       const candidates = [r, r / 2, r * 2];
       const best = candidates.reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p), r);
@@ -325,7 +422,7 @@ export class MixerEngine implements Engine {
     deck.filter.gain.linearRampToValueAtTime(0, swap + beat);
     deck.gain.gain.setValueAtTime(0, when);
     deck.gain.gain.linearRampToValueAtTime(1, swap);
-    this.startDeck(deck, when, deck.song.mixInS ?? 0, rate);
+    this.startDeck(deck, when, deck.kind === "full" ? (deck.song.mixInS ?? 0) : 0, rate);
     // Ease back to the song's own tempo over 20 s once it owns the floor.
     if (rate !== 1) {
       deck.source.playbackRate.setValueAtTime(rate, end);
@@ -460,13 +557,14 @@ export class MixerEngine implements Engine {
   }
 
   private emitStatus() {
+    this.fallbackNext();
     const cur = this.current;
     const status: EngineStatus = {
       current: cur?.song.songId ?? null,
       playing: Boolean(cur) && !this.paused,
       buffering: Boolean(this.queue[0]) && !cur,
       currentTime: cur ? this.position(cur) : 0,
-      duration: cur?.buffer.duration ?? 0,
+      duration: cur ? (cur.kind === "full" ? cur.buffer.duration : cur.song.durationS) : 0,
     };
     for (const cb of this.statusCbs) cb(status);
   }

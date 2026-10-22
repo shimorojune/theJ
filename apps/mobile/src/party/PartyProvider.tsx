@@ -101,11 +101,11 @@ export function PartyProvider({ children }: { children: ReactNode }) {
   /** "Mix it in now" picked this song; the mix starts the moment its audio is playable. */
   const pendingSkip = useRef<string | null>(null);
 
-  /** Hand the server's queue to the engine; only songs whose audio is pulled are playable. */
+  /** Hand the server's queue to the engine: songs whose audio is pulled or that have a preview. */
   const apply = useCallback((q: Queue) => {
     for (const s of [...q.committed, ...(q.upcoming ?? [])]) songs.current.set(s.songId, s);
     setQueue((prev) => ({ ...q, upcoming: q.upcoming ?? prev?.upcoming }));
-    const playable = q.committed.filter((s) => s.ready !== false);
+    const playable = q.committed.filter((s) => s.ready !== false || Boolean(s.previewUrl));
     engine.current?.setQueue(playable);
     if (q.skipTo) pendingSkip.current = q.skipTo;
     const target = pendingSkip.current;
