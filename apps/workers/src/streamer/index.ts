@@ -4,7 +4,7 @@ import { previewUrlFor } from "@thej/core";
 import { audioCache, songs } from "@thej/db";
 import { QUEUES, STREAM_READY_CHANNEL, type StreamJob, type StreamReady } from "@thej/shared";
 import { Worker } from "bullmq";
-import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
 import { Egress } from "../fetcher/egress";
 import { downloadAudio } from "../fetcher/ytdlp";
 import { db } from "../lib/db";
@@ -49,24 +49,44 @@ const stemPrefix = (songId: string) => join(DIR, "stems", songId.replace(/[^A-Za
 
 /**
  * Stems are split one song at a time after the song is ready, so they never hold up playback;
- * a song mixes the classic way until its stems are there.
+ * a song mixes the classic way until its stems are there. Fresh pulls (songs a listener is
+ * about to hear) jump ahead of the backfill of older cached songs.
  */
-let stemChain: Promise<unknown> = Promise.resolve();
-function queueStems(songId: string, path: string, a: Parameters<typeof splitStems>[2]) {
-  stemChain = stemChain.then(async () => {
-    const t0 = Date.now();
-    try {
-      await mkdir(join(DIR, "stems"), { recursive: true });
-      const { inS, outS } = await splitStems(path, stemPrefix(songId), a);
-      await db
-        .update(audioCache)
-        .set({ stemsInS: inS, stemsOutS: outS })
-        .where(eq(audioCache.songId, songId));
-      console.log(`stems ${songId} in ${Date.now() - t0} ms`);
-    } catch (err) {
-      console.error(`stems failed ${songId}: ${(err as Error).message}`);
+type StemJob = { songId: string; path: string; a: Parameters<typeof splitStems>[2] };
+const stemUrgent: StemJob[] = [];
+const stemBacklog: StemJob[] = [];
+let stemBusy = false;
+function queueStems(job: StemJob, urgent: boolean) {
+  (urgent ? stemUrgent : stemBacklog).push(job);
+  void drainStems();
+}
+async function drainStems() {
+  if (stemBusy) return;
+  stemBusy = true;
+  try {
+    for (
+      let job = stemUrgent.shift() ?? stemBacklog.shift();
+      job;
+      job = stemUrgent.shift() ?? stemBacklog.shift()
+    ) {
+      const t0 = Date.now();
+      try {
+        await mkdir(join(DIR, "stems"), { recursive: true });
+        const { inS, outS } = await splitStems(job.path, stemPrefix(job.songId), job.a);
+        await db
+          .update(audioCache)
+          .set({ stemsInS: inS, stemsOutS: outS })
+          .where(eq(audioCache.songId, job.songId));
+        console.log(
+          `stems ${job.songId} in ${Date.now() - t0} ms (${stemUrgent.length} + ${stemBacklog.length} waiting)`,
+        );
+      } catch (err) {
+        console.error(`stems failed ${job.songId}: ${(err as Error).message}`);
+      }
     }
-  });
+  } finally {
+    stemBusy = false;
+  }
 }
 
 const announce = (msg: StreamReady) =>
@@ -136,7 +156,7 @@ const worker = new Worker<StreamJob>(
         .where(eq(songs.id, songId));
       egress.reportJob();
       await announce({ songId, ok: true });
-      queueStems(songId, path, a);
+      queueStems({ songId, path, a }, true);
       return {
         bytes: size,
         bpm: a.bpm,
@@ -211,18 +231,27 @@ async function reanalyse() {
 }
 /** Songs pulled before stems existed get theirs, behind any new pulls' stems. */
 async function backfillStems() {
+  // Most recently played first: those are the songs likely to come round again.
   const rows = await db
     .select()
     .from(audioCache)
-    .where(and(isNull(audioCache.stemsOutS), isNotNull(audioCache.mixOutS)));
+    .where(and(isNull(audioCache.stemsOutS), isNotNull(audioCache.mixOutS)))
+    .orderBy(desc(audioCache.lastUsedAt));
   for (const r of rows)
-    queueStems(r.songId, r.path, {
-      bpm: r.bpm ?? 0,
-      mixInS: r.mixInS ?? 0,
-      mixOutS: r.mixOutS ?? 0,
-      mixInBeatS: r.mixInBeatS,
-      mixOutBeatS: r.mixOutBeatS,
-    });
+    queueStems(
+      {
+        songId: r.songId,
+        path: r.path,
+        a: {
+          bpm: r.bpm ?? 0,
+          mixInS: r.mixInS ?? 0,
+          mixOutS: r.mixOutS ?? 0,
+          mixInBeatS: r.mixInBeatS,
+          mixOutBeatS: r.mixOutBeatS,
+        },
+      },
+      false,
+    );
   if (rows.length) console.log(`stems queued for ${rows.length} cached songs`);
 }
 void reanalyse()
