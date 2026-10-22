@@ -15,11 +15,9 @@ services:
       AUDIO_URL_SIGNING_SECRET: ${AUDIO_URL_SIGNING_SECRET:?set AUDIO_URL_SIGNING_SECRET}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://thej.rraj.dev}
       STREAM_DIR: /data/stream
-      HF_HOME: /data/hf
       NODE_ENV: production
     volumes:
       - stream-data:/data/stream
-      - hf-cache:/data/hf
     depends_on: &after-migrate
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_started }
@@ -43,7 +41,6 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       TAG_SHARD: 0/1
     volumes:
-      - hf-cache:/data/hf
     depends_on: *after-migrate
     restart: "no"
 
@@ -111,7 +108,6 @@ volumes:
   pg-data:
   redis-data:
   stream-data:
-  hf-cache:
 
 networks:
   dokploy-network:

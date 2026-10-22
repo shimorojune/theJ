@@ -10,5 +10,8 @@ RUN pnpm install --frozen-lockfile --prod --filter @thej/api...
 COPY packages packages
 COPY apps/api apps/api
 WORKDIR /repo/apps/api
+# Bake the embedding model into the image: no download at runtime, loud failure at build.
+ENV HF_HOME=/opt/hf
+RUN node --import tsx -e "import('/repo/packages/core/src/embed.ts').then((m) => m.embedText('warm up'))"
 EXPOSE 3000
 CMD ["node", "--import", "tsx", "src/index.ts"]

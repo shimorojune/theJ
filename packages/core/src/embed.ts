@@ -1,4 +1,9 @@
-import { pipeline } from "@huggingface/transformers";
+import { join } from "node:path";
+import { env, pipeline } from "@huggingface/transformers";
+
+// transformers.js ignores HF_HOME and caches inside node_modules; the images bake the model
+// into HF_HOME at build time so the first session never waits on a download.
+if (process.env.HF_HOME) env.cacheDir = join(process.env.HF_HOME, "transformers");
 
 /** all-MiniLM-L6-v2, 384 dims, CPU. Songs and mood descriptions share this space. */
 type Embedder = (
