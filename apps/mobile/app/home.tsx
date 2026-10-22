@@ -1,8 +1,8 @@
-import { useUser } from "@clerk/expo";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useSession } from "../src/lib/auth";
 import { useNowPlaying, useParty } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
 import { Screen } from "../src/ui/kit";
@@ -15,12 +15,10 @@ const greeting = () => {
 };
 
 export default function Home() {
-  const { user } = useUser();
+  const { firstName, email } = useSession();
   const { queue } = useParty();
   const { now } = useNowPlaying();
-  const initial = (user?.firstName ?? user?.primaryEmailAddress?.emailAddress ?? "?")
-    .slice(0, 1)
-    .toUpperCase();
+  const initial = (firstName ?? email ?? "?").slice(0, 1).toUpperCase();
 
   return (
     <Screen style={{ paddingHorizontal: 20 }}>
@@ -50,9 +48,7 @@ export default function Home() {
             <View style={{ flexDirection: "row", gap: 14, alignItems: "center" }}>
               <Image source={now.thumbUrl} style={st.liveArt} contentFit="cover" />
               <View style={{ flex: 1, gap: 3 }}>
-                <Text style={st.liveTitle}>
-                  {user?.firstName ? `${user.firstName}'s mood` : "Your mood"}
-                </Text>
+                <Text style={st.liveTitle}>{firstName ? `${firstName}'s mood` : "Your mood"}</Text>
                 <Text style={st.liveSub} numberOfLines={1}>
                   {now.title}
                 </Text>

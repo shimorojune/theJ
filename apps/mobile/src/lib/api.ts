@@ -1,7 +1,7 @@
-import { useAuth } from "@clerk/expo";
 import type { AppType } from "@thej/api";
 import { hc } from "hono/client";
 import { useMemo } from "react";
+import { DEV_USER, useSession } from "./auth";
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://thej.rraj.dev";
 
@@ -9,6 +9,7 @@ export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "https://thej.rraj.dev
 export function createApi(getToken: () => Promise<string | null>) {
   return hc<AppType>(API_URL, {
     headers: async (): Promise<Record<string, string>> => {
+      if (DEV_USER) return { "x-dev-user": DEV_USER };
       const token = await getToken();
       return token ? { Authorization: `Bearer ${token}` } : {};
     },
@@ -17,8 +18,8 @@ export function createApi(getToken: () => Promise<string | null>) {
 export type Api = ReturnType<typeof createApi>;
 
 export function useApi() {
-  const { getToken } = useAuth();
-  return useMemo(() => createApi(() => getToken()), [getToken]);
+  const { getToken } = useSession();
+  return useMemo(() => createApi(getToken), [getToken]);
 }
 
 type Res = { ok: boolean; status: number; text(): Promise<string>; json(): Promise<unknown> };

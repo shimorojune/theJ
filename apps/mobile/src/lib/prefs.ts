@@ -1,6 +1,6 @@
-import { useUser } from "@clerk/expo";
 import { useCallback } from "react";
 import { ok, useApi } from "./api";
+import { useSession } from "./auth";
 
 export type LanguageChoice = "en" | "hi" | "mix";
 export type Prefs = { languages: ("en" | "hi")[]; mixRatio: number };
@@ -18,16 +18,14 @@ export const toChoice = (languages: string[]): LanguageChoice =>
 /** Server-side prefs (used by the DJ) plus an onboarded flag on the Clerk user. */
 export function usePrefs() {
   const api = useApi();
-  const { user } = useUser();
+  const { markOnboarded } = useSession();
   const load = useCallback(async () => ok<Prefs>(await api.me.$get()), [api]);
   const save = useCallback(
     async (prefs: Prefs) => {
       await ok(await api.me.$put({ json: prefs }));
-      if (user && !user.unsafeMetadata?.onboarded) {
-        await user.updateMetadata({ unsafeMetadata: { onboarded: true } });
-      }
+      await markOnboarded();
     },
-    [api, user],
+    [api, markOnboarded],
   );
   return { load, save };
 }

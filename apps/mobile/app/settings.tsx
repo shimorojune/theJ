@@ -1,7 +1,7 @@
-import { useAuth, useUser } from "@clerk/expo";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useSession } from "../src/lib/auth";
 import { type LanguageChoice, toChoice, toLanguages, usePrefs } from "../src/lib/prefs";
 import { useParty } from "../src/party/PartyProvider";
 import { c } from "../src/theme";
@@ -9,8 +9,7 @@ import { GhostButton, IconButton, PrimaryButton, Screen } from "../src/ui/kit";
 import { LanguagePicker } from "../src/ui/LanguagePicker";
 
 export default function Settings() {
-  const { signOut } = useAuth();
-  const { user } = useUser();
+  const { signOut, email } = useSession();
   const { load, save } = usePrefs();
   const { queue, end } = useParty();
   const [choice, setChoice] = useState<LanguageChoice>("mix");
@@ -61,7 +60,7 @@ export default function Settings() {
             onPress={() => void end().then(() => router.replace("/home"))}
           />
         ) : null}
-        <Text style={st.meta}>Signed in as {user?.primaryEmailAddress?.emailAddress}</Text>
+        <Text style={st.meta}>Signed in as {email}</Text>
         <GhostButton
           label="Sign out"
           onPress={() =>

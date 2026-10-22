@@ -1,4 +1,3 @@
-import { useAuth } from "@clerk/expo";
 import type { Button, Vibe } from "@thej/shared";
 import {
   type AudioPlaylistStatus,
@@ -20,6 +19,7 @@ import {
 import { Platform } from "react-native";
 import EventSource from "react-native-sse";
 import { API_URL, ok, useApi } from "../lib/api";
+import { DEV_USER, useSession } from "../lib/auth";
 import type { Queue, Song } from "../lib/types";
 
 const SESSION_KEY = "thej.session";
@@ -58,7 +58,7 @@ export const useParty = () => {
  */
 export function PartyProvider({ children }: { children: ReactNode }) {
   const api = useApi();
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isSignedIn } = useSession();
   const playlist = useAudioPlaylist({ updateInterval: 500 });
   const status = useAudioPlaylistStatus(playlist);
   const [queue, setQueue] = useState<Queue | null>(null);
@@ -207,7 +207,7 @@ export function PartyProvider({ children }: { children: ReactNode }) {
       const token = await getToken();
       if (closed) return;
       es = new EventSource<"queue" | "ping">(`${API_URL}/sessions/${sessionId}/stream`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: DEV_USER ? { "x-dev-user": DEV_USER } : { Authorization: `Bearer ${token}` },
         pollingInterval: 0,
       });
       es.addEventListener("queue", (e) => {
