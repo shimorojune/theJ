@@ -50,6 +50,9 @@ export const SWITCH_S = 0.03;
 /** Beats the filter style thins the outgoing song over before the switch. */
 export const FILTER_BEATS = 8;
 export const ECHO_FEEDBACK = 0.45;
+/** The outgoing song's tail after a blend or cut: its lows (below the high-pass) go at once, the rest fades over the beats. */
+export const TAIL_BEATS = 2;
+export const TAIL_HIGHPASS_HZ = 250;
 export const ECHO_TAIL_BEATS = 8;
 
 /** What the planner needs to know about a song: its analysis. */
@@ -253,7 +256,11 @@ export function planHandOver(i: HandOverInput): HandOver {
     style === "blend" && i.master != null && i.stems
       ? stemHandOver(i.stems, when, rate, i.inOffset, inS, outS, beat)
       : null;
-  const end = swap + outS + (stems ? beat : 0);
+  // Blend and cut leave with a tail: on the switch the outgoing lows go (no second kick under
+  // the new downbeat), and the rest of it fades over TAIL_BEATS, so it never just stops.
+  const tailS =
+    !stems && outS === 0 && (style === "blend" || style === "cut") ? TAIL_BEATS * beat : 0;
+  const end = swap + outS + tailS + (stems ? beat : 0);
   // A clean switch: the old song is gone just before the new song's downbeat, so the two
   // downbeats never land together (a flam, or a doubled beat).
   const cutAt = Math.max(when, swap - SWITCH_S);
@@ -356,13 +363,22 @@ export function planHandOver(i: HandOverInput): HandOver {
               { t: end, v: 0, ramp: true },
             ],
           }
-        : {
-            cancel: when - lead,
-            steps: [
-              { t: cutAt, v: 1 },
-              { t: swap, v: 0, ramp: true },
-            ],
-          },
+        : tailS > 0
+          ? {
+              cancel: when - lead,
+              steps: [
+                { t: swap, v: 1 },
+                { t: swap + tailS / 2, v: 0.35, ramp: true },
+                { t: end, v: 0, ramp: true },
+              ],
+            }
+          : {
+              cancel: when - lead,
+              steps: [
+                { t: cutAt, v: 1 },
+                { t: swap, v: 0, ramp: true },
+              ],
+            },
     stopAt: end + 0.1,
   };
   if (outS > 0)
@@ -370,6 +386,13 @@ export function planHandOver(i: HandOverInput): HandOver {
       steps: [
         { t: swap, v: 0 },
         { t: swap + beat, v: BASS_CUT_DB, ramp: true },
+      ],
+    };
+  if (tailS > 0)
+    h.outgoing.highpass = {
+      steps: [
+        { t: cutAt, v: 20 },
+        { t: swap, v: TAIL_HIGHPASS_HZ, exp: true },
       ],
     };
   if (style === "filter")
