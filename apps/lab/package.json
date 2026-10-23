@@ -1,0 +1,16 @@
+{
+  "name": "@thej/lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "typecheck": "tsc -p .",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@thej/mix": "workspace:*",
+    "node-web-audio-api": "^2.2.0",
+    "tsx": "^4.23.15"
+  }
+}

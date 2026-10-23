@@ -14,6 +14,7 @@
     "@expo/vector-icons": "^15.0.2",
     "@react-native-community/slider": "5.2.1",
     "@tanstack/react-query": "^5.104.5",
+    "@thej/mix": "workspace:*",
     "@thej/shared": "workspace:*",
     "expo": "~58.0.16",
     "expo-audio": "~58.0.10",

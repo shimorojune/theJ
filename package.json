@@ -30,7 +30,8 @@
     "crawl": "pnpm --filter @thej/workers crawl",
     "sets": "pnpm --filter @thej/workers sets",
     "ship:apk": "apps/mobile/scripts/ship-apk.sh",
-    "ship:ota": "apps/mobile/scripts/ship-ota.sh"
+    "ship:ota": "apps/mobile/scripts/ship-ota.sh",
+    "mix": "pnpm --silent --filter @thej/lab cli"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.2",

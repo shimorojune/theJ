@@ -1,3 +1,17 @@
+import {
+  apply,
+  BASS_HZ,
+  type HandOver,
+  MIX,
+  matchRate,
+  NOW,
+  onGrid,
+  planHandOver,
+  SKIP,
+  type StemInput,
+  type StemVoices,
+  songBeat,
+} from "@thej/mix";
 import { AppState } from "react-native";
 import {
   type AudioBuffer,
@@ -13,21 +27,6 @@ import type { Engine, EngineStatus, TrackChange } from "./engine";
 
 /** How far ahead of the mix point the next song must be decoded. */
 const PRELOAD_AHEAD_S = 90;
-/**
- * A planned mix: the next song runs beat-matched under the current one with its bass cut for
- * IN beats, the bass swaps on a beat, and the current song drops out over OUT beats.
- */
-const MIX = { in: 16, out: 8 };
-/** A skip is the same move, just fast. */
-const SKIP = { in: 2, out: 2 };
-/** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
-const NOW = { in: 8, out: 4 };
-const MAX_TEMPO_STRETCH = 0.08;
-/** Two mastered songs summed clip; the master dips this far (-3 dB) while both play. */
-const MIX_HEADROOM = 0.71;
-/** The bass shelf each deck has: cut while a song is coming in, open once it owns the floor. */
-const BASS_HZ = 180;
-const BASS_CUT_DB = -18;
 
 /** A full song, or its 30-second store preview while the full audio is pulled. */
 type Kind = "full" | "preview";
@@ -537,19 +536,10 @@ export class MixerEngine implements Engine {
     return now + (t - this.positionAt(deck, now)) / this.rateAt(deck, now);
   }
 
-  /**
-   * Beat length of `song` in its own time at a mix point: the grid the server fitted to the
-   * audio there when it has one (song-wide bpm drifts 100 ms or more over a mix), else the bpm.
-   */
-  private songBeat(song: Song, at: "in" | "out"): number | null {
-    const fitted = at === "in" ? song.mixInBeatS : song.mixOutBeatS;
-    return fitted || (song.bpm ? 60 / song.bpm : null);
-  }
-
   /** One beat of `deck` (at its mix-out) in context seconds. */
   private beatSeconds(deck: Deck | null, fallback: Song): number {
-    const own = deck ? this.songBeat(deck.song, "out") : null;
-    const beat = own ?? this.songBeat(fallback, "in") ?? 0.6;
+    const own = deck ? songBeat(deck.song, "out") : null;
+    const beat = own ?? songBeat(fallback, "in") ?? 0.6;
     return own && deck ? beat / this.rateAt(deck, this.ctx.currentTime) : beat;
   }
 
@@ -561,8 +551,7 @@ export class MixerEngine implements Engine {
     if (!cur || cur.kind === "preview" || !cur.song.bpm || cur.song.mixOutS == null || this.paused)
       return earliest;
     const anchor = this.atSongTime(cur, cur.song.mixOutS);
-    const period = this.beatSeconds(cur, cur.song) * beats;
-    return anchor + Math.ceil((earliest - anchor) / period - 1e-6) * period;
+    return onGrid(anchor, this.beatSeconds(cur, cur.song) * beats, earliest);
   }
 
   /** Arm a timer for the current song's mix-out point once the next deck is decoded. */
@@ -592,8 +581,8 @@ export class MixerEngine implements Engine {
   }
 
   /**
-   * Bring `deck` in at `when` on the current deck's beat grid, tempo-matched, bass cut. After
-   * `plan.in` beats the bass swaps and the current deck drops out over `plan.out` beats.
+   * Bring `deck` in at `when` on the current deck's beat grid, tempo-matched, as planned by
+   * planHandOver (packages/mix): the same schedules the lab renders.
    */
   private mixInto(
     deck: Deck,
@@ -605,67 +594,36 @@ export class MixerEngine implements Engine {
     const from = cur?.song.songId ?? null;
     let rate = 1;
     // Tempo matching needs both beat grids: previews have none.
-    const curBeat = cur ? this.songBeat(cur.song, "out") : null;
-    const inBeat = this.songBeat(deck.song, "in");
-    if (cur?.kind === "full" && deck.kind === "full" && curBeat && inBeat) {
-      // Fast enough that one beat of `deck` lasts as long as one beat of `cur` as it plays now.
-      const r = (inBeat * this.rateAt(cur, when)) / curBeat;
-      const candidates = [r, r / 2, r * 2];
-      const best = candidates.reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p), r);
-      if (Math.abs(best - 1) <= MAX_TEMPO_STRETCH) rate = best;
+    const curBeat = cur ? songBeat(cur.song, "out") : null;
+    const inBeat = songBeat(deck.song, "in");
+    if (cur?.kind === "full" && deck.kind === "full" && curBeat && inBeat)
+      rate = matchRate(curBeat, this.rateAt(cur, when), inBeat);
+    const offset = deck.kind === "full" ? (deck.song.mixInS ?? 0) : 0;
+    const h = planHandOver({
+      when,
+      plan,
+      beat: this.beatSeconds(cur, deck.song),
+      rate,
+      inOffset: offset,
+      master: cur ? this.master.gain.value : null,
+      stems: reason === "complete" && cur ? this.stemInput(cur, deck) : null,
+    });
+    if (cur && h.stems) this.playStems(cur, deck, h.stems);
+    apply(this.master.gain, h.master);
+    apply(deck.gain.gain, h.incoming.gain);
+    apply(deck.filter.gain, h.incoming.bass);
+    this.startDeck(deck, when, offset, rate);
+    if (h.incoming.easeBack) {
+      apply(deck.source.playbackRate, h.incoming.easeBack.rate);
+      deck.ramp = { at: h.incoming.easeBack.at, dur: h.incoming.easeBack.dur };
     }
-    const beat = this.beatSeconds(cur, deck.song);
-    const inS = Math.min(14, plan.in * beat);
-    const outS = Math.min(8, plan.out * beat);
-    const swap = when + inS;
-    let end = swap + outS;
-    const stemmed =
-      reason === "complete" && cur
-        ? this.stemHandOver(cur, deck, when, rate, inS, outS, beat)
-        : false;
-    if (stemmed) end += beat;
-
-    if (cur) {
-      // Headroom while both decks play, eased so the dip itself is not heard.
-      const g = this.master.gain;
-      const from = g.value;
-      g.cancelScheduledValues(when);
-      g.setValueAtTime(from, when);
-      g.linearRampToValueAtTime(MIX_HEADROOM, when + 2 * beat);
-      g.setValueAtTime(MIX_HEADROOM, end);
-      g.linearRampToValueAtTime(1, end + 4 * beat);
-    }
-
-    if (stemmed) {
-      // The stems carry the hand-over; the full song takes over from them as it ends.
-      deck.gain.gain.setValueAtTime(0, when);
-      deck.gain.gain.setValueAtTime(0, end - beat);
-      deck.gain.gain.linearRampToValueAtTime(1, end);
-    } else {
-      deck.filter.gain.setValueAtTime(BASS_CUT_DB, when);
-      deck.filter.gain.linearRampToValueAtTime(0, swap + beat);
-      deck.gain.gain.setValueAtTime(0, when);
-      deck.gain.gain.linearRampToValueAtTime(1, swap);
-    }
-    this.startDeck(deck, when, deck.kind === "full" ? (deck.song.mixInS ?? 0) : 0, rate);
-    // Ease back to the song's own tempo over 20 s once it owns the floor.
-    if (rate !== 1) {
-      deck.source.playbackRate.setValueAtTime(rate, end);
-      deck.source.playbackRate.linearRampToValueAtTime(1, end + 20);
-      deck.ramp = { at: end, dur: 20 };
-    }
-    if (cur && !stemmed) {
-      cur.filter.gain.setValueAtTime(0, swap);
-      cur.filter.gain.linearRampToValueAtTime(BASS_CUT_DB, swap + beat);
-      cur.gain.gain.cancelScheduledValues(when);
-      cur.gain.gain.setValueAtTime(1, swap);
-      cur.gain.gain.linearRampToValueAtTime(0, end);
-    }
-    if (cur) {
+    if (cur && h.outgoing) {
+      apply(cur.gain.gain, h.outgoing.gain);
+      apply(cur.filter.gain, h.outgoing.bass);
       try {
-        cur.source.stop(end + 0.1);
+        cur.source.stop(h.outgoing.stopAt);
       } catch {}
-      this.retire(cur, end - this.ctx.currentTime + 0.2);
+      this.retire(cur, h.end - this.ctx.currentTime + 0.2);
     }
     this.current = deck;
     this.paused = false;
@@ -673,109 +631,48 @@ export class MixerEngine implements Engine {
     for (const cb of this.trackCbs) cb({ from, to: deck.song.songId, reason });
     const after = this.queue[this.queue.findIndex((s) => s.songId === deck.song.songId) + 1];
     // Decode the following song once the outgoing deck has stopped, never in the middle of a mix.
-    this.mixingUntil = end;
+    this.mixingUntil = h.end;
     if (after) void this.prepareNext(after);
   }
 
-  /**
-   * The DJ hand-over with stems, when both songs have them around this mix: bars counted from
-   * `when` (inS = 16 beats in, outS = 8 out at the usual plan)
-   *   one beat before   the outgoing song crossfades from its full audio to its stems (they
-   *                     sum to the same sound, so nothing audible changes)
-   *   first half        the incoming drums ride in under it
-   *   second half       the outgoing vocals fade out; the incoming music comes in
-   *   swap              bass swap on the downbeat: outgoing bass out, incoming bass and vocals in
-   *   out               the outgoing drums and music fade; then the incoming full song takes over
-   *                     from its stems over a beat
-   * Returns false (and schedules nothing) when either song's stems are missing or don't cover
-   * the mix, so the caller does the classic hand-over.
-   */
-  private stemHandOver(
-    cur: Deck,
-    deck: Deck,
-    when: number,
-    rate: number,
-    inS: number,
-    outS: number,
-    beat: number,
-  ): boolean {
-    if (cur.kind !== "full" || deck.kind !== "full" || this.repeat) return false;
+  /** The decoded stems both songs have around this mix, or null for the classic hand-over. */
+  private stemInput(cur: Deck, deck: Deck): StemInput | null {
+    if (cur.kind !== "full" || deck.kind !== "full" || this.repeat) return null;
     const outSet = this.stemSets.get(`out:${cur.song.songId}`);
     const inSet = this.stemSets.get(`in:${deck.song.songId}`);
-    if (!outSet || !inSet) return false;
-    const swap = when + inS;
-    const end = swap + outS;
-    const from = Math.max(when - beat, this.ctx.currentTime + 0.03);
-    const curRate = this.rateAt(cur, from);
-    const offA = this.positionAt(cur, from) - outSet.start;
-    const offB = (deck.song.mixInS ?? 0) - inSet.start;
-    const needA = (end - from) * curRate;
-    const needB = (end + beat - when) * rate;
-    const cover = (set: StemSet, off: number, need: number) =>
-      off >= 0 && Object.values(set.parts).every((b) => off + need <= b.duration);
-    if (!cover(outSet, offA, needA) || !cover(inSet, offB, needB)) return false;
-
-    const a = Object.fromEntries(
-      Object.entries(outSet.parts).map(([k, b]) => [k, this.stemVoice(b, curRate, from, offA)]),
-    ) as Record<"vocals" | "bass" | "rest", StemVoice>;
-    const b = Object.fromEntries(
-      Object.entries(inSet.parts).map(([k, buf]) => [k, this.stemVoice(buf, rate, when, offB)]),
-    ) as Record<"drums" | "other" | "rest", StemVoice>;
-    const env = (v: StemVoice, points: [number, number][]) => {
-      const g = v.gain.gain;
-      g.setValueAtTime(points[0]?.[1] ?? 0, points[0]?.[0] ?? from);
-      for (const [t, value] of points.slice(1)) g.linearRampToValueAtTime(value, t);
+    if (!outSet || !inSet) return null;
+    const lengths = (set: StemSet) =>
+      Object.fromEntries(Object.entries(set.parts).map(([k, b]) => [k, b.duration]));
+    return {
+      now: this.ctx.currentTime,
+      outPosAt: (t) => this.positionAt(cur, t),
+      outRateAt: (t) => this.rateAt(cur, t),
+      outStart: outSet.start,
+      inStart: inSet.start,
+      outLengths: lengths(outSet) as StemInput["outLengths"],
+      inLengths: lengths(inSet) as StemInput["inLengths"],
     };
-    const mid = when + inS / 2;
-    const cut = 0.02;
-    // Outgoing: full audio hands to its stems over [from, when].
-    cur.gain.gain.cancelScheduledValues(from);
-    cur.gain.gain.setValueAtTime(1, from);
-    cur.gain.gain.linearRampToValueAtTime(0, when);
-    env(a.vocals, [
-      [from, 0],
-      [when, 1],
-      [mid, 1],
-      [when + inS * 0.875, 0],
-    ]);
-    env(a.bass, [
-      [from, 0],
-      [when, 1],
-      [swap, 1],
-      [swap + cut, 0],
-    ]);
-    env(a.rest, [
-      [from, 0],
-      [when, 1],
-      [swap, 1],
-      [end, 0],
-    ]);
-    // Incoming: drums, then music, then bass and vocals on the swap; full audio after.
-    env(b.drums, [
-      [when, 0],
-      [mid, 1],
-      [end, 1],
-      [end + beat, 0],
-    ]);
-    env(b.other, [
-      [when, 0],
-      [mid, 0],
-      [swap, 1],
-      [end, 1],
-      [end + beat, 0],
-    ]);
-    env(b.rest, [
-      [when, 0],
-      [swap, 0],
-      [swap + cut, 1],
-      [end, 1],
-      [end + beat, 0],
-    ]);
-    this.endVoices(Object.values(a), end + 0.1);
-    this.endVoices(Object.values(b), end + beat + 0.1);
-    this.stemSets.delete(`out:${cur.song.songId}`);
-    this.stemSets.delete(`in:${deck.song.songId}`);
-    return true;
+  }
+
+  /** Start the stem voices of a planned stem hand-over; their windows are used up after it. */
+  private playStems(cur: Deck, deck: Deck, stems: NonNullable<HandOver["stems"]>) {
+    const outKey = `out:${cur.song.songId}`;
+    const inKey = `in:${deck.song.songId}`;
+    const play = <K extends string>(set: StemSet | undefined, v: StemVoices<K>) => {
+      const voices: StemVoice[] = [];
+      for (const [part, schedule] of Object.entries(v.gain) as [K, HandOver["master"]][]) {
+        const buffer = set?.parts[part];
+        if (!buffer) continue;
+        const voice = this.stemVoice(buffer, v.rate, v.at, v.offset);
+        apply(voice.gain.gain, schedule);
+        voices.push(voice);
+      }
+      this.endVoices(voices, v.stopAt);
+    };
+    play(this.stemSets.get(outKey), stems.out);
+    play(this.stemSets.get(inKey), stems.in);
+    this.stemSets.delete(outKey);
+    this.stemSets.delete(inKey);
   }
 
   private onCurrentEnded(deck: Deck) {
