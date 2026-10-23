@@ -3,8 +3,11 @@
  *
  *   pnpm mix fetch [--limit 60]          pulled songs + analysis from the api, audio cached locally
  *   pnpm mix list [words]              cached songs that can be mixed
- *   pnpm mix render <A> <B> [--plan 16/8] [--pre 16] [--post 16]
- *                                      one hand-over to apps/lab/out/<A>__<B>.wav, plus its score
+ *   pnpm mix render <A> <B> [--plan 16/8] [--from s] [--analysed] [--pre 16] [--post 16]
+ *                                      one hand-over to apps/lab/out/<A>__<B>.wav, plus its score.
+ *                                      By default the DJ is asked for B at --from (A's time, default
+ *                                      30 s before its mix-out) and waits for the best matching
+ *                                      points; --analysed mixes at the server's points instead.
  *   pnpm mix bench [--n 20]            score many tempo-matchable pairs, write out/bench.md
  *   pnpm mix lab [--port 4400]         the same in a browser: pick pairs, change the plan, listen
  *
@@ -28,6 +31,8 @@ const { positionals, values } = parseArgs({
     post: { type: "string", default: "16" },
     n: { type: "string", default: "20" },
     json: { type: "boolean", default: false },
+    analysed: { type: "boolean", default: false },
+    from: { type: "string" },
     port: { type: "string", default: "4400" },
   },
 });
@@ -50,6 +55,15 @@ function show(s: Score) {
   console.log(
     `  key     ${s.keys}${s.keySteps == null ? "" : s.keySteps <= 1 ? "  compatible" : `  ${s.keySteps} steps apart, clashes`}`,
   );
+  const mmss = (t: number) =>
+    `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+  console.log(
+    `  points  A ${mmss(s.points.outS)} → B ${mmss(s.points.inS)} (${s.points.mode}${s.points.mode === "chosen" ? `, waited ${s.points.waitS}s` : ""})`,
+  );
+  if (s.levels.out != null)
+    console.log(
+      `  match   A ${s.levels.out} dB, B ${s.levels.in} dB over the overlap (trims ${s.levels.outTrim} / ${s.levels.inTrim} dB)`,
+    );
   console.log(`  beats   ${ms(s.lagMs)} median, drift ${ms(s.driftMs)}${flam}`);
   console.log(`          per bar: ${s.bars.map((b) => `${b}`).join(" ")}`);
   const dip = s.loudness.before - s.loudness.low;
@@ -81,7 +95,13 @@ async function main() {
     return;
   }
   await mkdir(OUT, { recursive: true });
-  const opts = { plan: planOf(values.plan), pre: Number(values.pre), post: Number(values.post) };
+  const opts = {
+    plan: planOf(values.plan),
+    pre: Number(values.pre),
+    post: Number(values.post),
+    mode: values.analysed ? ("analysed" as const) : ("choose" as const),
+    from: values.from == null ? undefined : Number(values.from),
+  };
   if (cmd === "render") {
     const [qa, qb] = args;
     if (!qa || !qb) throw new Error("render <A> <B>");
@@ -115,7 +135,7 @@ async function main() {
     const rows: Score[] = [];
     for (const [a, b] of pick) {
       try {
-        const r = await renderHandOver(a, b, { ...opts, post: 5 });
+        const r = await renderHandOver(a, b, { ...opts, post: 6 });
         rows.push(r.score);
         console.error(`${r.score.lagMs} ms  ${a.title} → ${b.title}`);
       } catch (e) {
@@ -125,20 +145,25 @@ async function main() {
     const lags = rows.flatMap((r) => (r.lagMs == null ? [] : [Math.abs(r.lagMs)]));
     const tight = lags.filter((l) => l <= 20).length;
     const sorted = [...lags].sort((x, y) => x - y);
+    const dips = rows.map((r) => r.loudness.before - r.loudness.low);
+    const holes = dips.filter((d) => d >= 6).length;
+    const clips = rows.filter((r) => r.peakDb > 0).length;
+    const waits = rows.map((r) => r.points.waitS).sort((x, y) => x - y);
     const lines = [
-      `# Mix bench: ${rows.length} tempo-matched pairs (within ${MAX_TEMPO_STRETCH * 100}%)`,
+      `# Mix bench (${opts.mode === "choose" ? "chosen points" : "analysed points"}): ${rows.length} tempo-matchable pairs`,
       "",
       `Beats within 20 ms: ${tight} of ${lags.length}. Median |lag| ${sorted[sorted.length >> 1] ?? "-"} ms.`,
+      `Level drops of 6 dB or more: ${holes}. Clipping: ${clips}. Median wait ${waits[waits.length >> 1] ?? "-"} s.`,
       "",
-      "| A | B | BPM | rate | keys | lag ms | drift ms | level during |",
-      "|---|---|---|---|---|---|---|---|",
+      "| A | B | points | BPM | rate | keys | lag ms | drift ms | level before / low |",
+      "|---|---|---|---|---|---|---|---|---|",
       ...rows.map(
         (r) =>
-          `| ${r.a} | ${r.b} | ${r.bpm} | ${r.rate} | ${r.keys} | ${r.lagMs} | ${r.driftMs} | ${r.loudness.low}..${r.loudness.high} dB |`,
+          `| ${r.a} | ${r.b} | ${r.points.outS}s → ${r.points.inS}s | ${r.bpm} | ${r.rate} | ${r.keys} | ${r.lagMs} | ${r.driftMs} | ${r.loudness.before} / ${r.loudness.low} dB |`,
       ),
     ];
     await writeFile(join(OUT, "bench.md"), `${lines.join("\n")}\n`);
-    console.log(lines.slice(0, 3).join("\n"));
+    console.log(lines.slice(0, 4).join("\n"));
     console.log(`  ${join(OUT, "bench.md")}`);
     return;
   }

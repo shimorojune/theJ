@@ -35,47 +35,55 @@
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
   .muted { color: var(--muted); } .err { color: var(--bad); white-space: pre-wrap; }
+  .now { font-size: 16px; font-weight: 600; } .big { font-size: 16px; padding: 10px 18px; }
+  .status { margin-top: 10px; font-size: 15px; min-height: 22px; }
+  select { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>theJ DJ lab <span class="muted" style="font-weight:400">· the phone's hand-over, rendered on your Mac</span></h1>
+  <h1>theJ DJ lab <span class="muted" style="font-weight:400">· the phone's mixer on your Mac</span></h1>
 
   <section>
-    <h2>Hand-over</h2>
+    <h2>Now playing</h2>
     <div class="row">
-      <label>Outgoing (A)<input class="song" id="a" list="songs" placeholder="type a title" /></label>
-      <label>Incoming (B)<input class="song" id="b" list="songs" placeholder="type a title" /></label>
-      <button type="button" id="swap" title="Swap A and B">⇄</button>
-      <button type="button" id="random">Random matchable pair</button>
+      <label>Song<input class="song" id="a" list="songs" placeholder="type a title" /></label>
+      <label>Start at (s)<input class="num" id="start" type="number" value="60" min="0" /></label>
+      <button type="button" id="play">Play</button>
+      <button type="button" id="stop">Stop</button>
     </div>
-    <div class="row" style="margin-top:10px">
+    <div class="status"><span class="now" id="nowTitle">Nothing playing.</span> <span class="muted" id="nowPos"></span></div>
+  </section>
+
+  <section>
+    <h2>Up next</h2>
+    <div class="row">
+      <label>Song<input class="song" id="b" list="songs" placeholder="type a title" /></label>
+      <button type="button" id="random">Random matchable song</button>
       <label>Beats in<input class="num" id="in" type="number" value="16" min="1" /></label>
       <label>Beats out<input class="num" id="out" type="number" value="8" min="1" /></label>
-      <label>A before (s)<input class="num" id="pre" type="number" value="12" min="2" /></label>
-      <label>B after (s)<input class="num" id="post" type="number" value="12" min="2" /></label>
-      <button type="button" class="primary" id="go">Render and play</button>
-      <span id="status" class="muted"></span>
+      <label>Mix points<select id="mode"><option value="choose">chosen by the DJ</option><option value="analysed">analysed (old)</option></select></label>
+      <button type="button" class="primary big" id="go">Transition</button>
     </div>
+    <div class="status" id="status"></div>
     <datalist id="songs"></datalist>
   </section>
 
   <section>
     <div class="legend">
-      <span><i style="background:var(--a)"></i>A level</span>
-      <span><i style="background:var(--b)"></i>B level</span>
-      <span><i style="background:var(--a);opacity:.4"></i>A bass cut</span>
-      <span><i style="background:var(--b);opacity:.4"></i>B bass cut</span>
+      <span><i style="background:var(--a)"></i>outgoing level</span>
+      <span><i style="background:var(--b)"></i>incoming level</span>
+      <span><i style="background:var(--a);opacity:.4"></i>outgoing bass cut</span>
+      <span><i style="background:var(--b);opacity:.4"></i>incoming bass cut</span>
       <span><i style="background:var(--master)"></i>master</span>
       <span>dots: beat lag per bar (green within 20 ms)</span>
     </div>
     <canvas id="tl"></canvas>
-    <audio id="player" controls><track kind="captions" /></audio>
   </section>
 
   <div class="grid2">
-    <section><h2>Score</h2><dl class="score" id="score"><dt class="muted">—</dt><dd class="muted">Render a pair to see it.</dd></dl></section>
-    <section><h2>Renders this session</h2><ul id="history"><li class="muted">None yet.</li></ul></section>
+    <section><h2>Last transition</h2><dl class="score" id="score"><dt class="muted">—</dt><dd class="muted">Play a song, pick what's next and press Transition.</dd></dl></section>
+    <section><h2>Transitions this session</h2><ul id="history"><li class="muted">None yet.</li></ul></section>
   </div>
 
   <section>
@@ -90,12 +98,22 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+const ctx = new AudioContext({ sampleRate: 48000 });
 let songs = [];
-let current = null;
+/** The song playing as plain audio: started at context time t0 from song time pos0. */
+let deck = null;
+/** The transition playing: its render started at context time T from render time offset. */
+let mix = null;
+let shown = null;
+let busy = false;
 const history = [];
+const decks = new Map();
 
 const label = (s) => `${s.title} · ${s.artist}`;
 const byLabel = (v) => songs.find((s) => label(s) === v || s.id === v);
+const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const deckPos = (d) => d.pos0 + (ctx.currentTime - d.t0);
+const mixTime = (m) => m.offset + (ctx.currentTime - m.T);
 
 async function getJson(url) {
   const r = await fetch(url);
@@ -112,72 +130,129 @@ function rate(a, b) {
   return Math.abs(best - 1) <= 0.08 ? best : 1;
 }
 
-async function loadSongs() {
-  songs = await getJson("/songs");
-  $("songs").innerHTML = songs.map((s) => `<option value="${label(s).replace(/"/g, "&quot;")}">${s.bpm?.toFixed(1)} bpm · ${s.key}</option>`).join("");
-  $("status").textContent = `${songs.length} cached songs`;
+/** A song's plain audio, decoded once (the server decodes it the way renders do). */
+function loadDeck(song) {
+  if (!decks.has(song.id)) {
+    decks.set(song.id, (async () => {
+      const r = await fetch(`/deck?song=${encodeURIComponent(song.id)}`);
+      if (!r.ok) throw new Error((await r.json()).error);
+      const trimDb = Number(r.headers.get("X-Trim-Db") || 0);
+      return { buf: await ctx.decodeAudioData(await r.arrayBuffer()), trimDb };
+    })());
+  }
+  return decks.get(song.id);
 }
 
-function randomPair() {
-  for (let i = 0; i < 500; i++) {
-    const a = songs[Math.floor(Math.random() * songs.length)];
-    const b = songs[Math.floor(Math.random() * songs.length)];
-    if (a !== b && rate(a, b) !== 1) {
-      $("a").value = label(a);
-      $("b").value = label(b);
-      return;
-    }
+function startDeck(song, d, pos, when) {
+  const source = ctx.createBufferSource();
+  source.buffer = d.buf;
+  const gain = ctx.createGain();
+  gain.gain.value = 10 ** (d.trimDb / 20);
+  source.connect(gain).connect(ctx.destination);
+  source.start(when, pos);
+  return { song, source, t0: when, pos0: pos };
+}
+
+function stopAll() {
+  for (const x of [deck, mix]) try { x?.source.stop(); } catch {}
+  deck = null;
+  mix = null;
+}
+
+async function play() {
+  const song = byLabel($("a").value);
+  if (!song) return say('<span class="err">Pick a song from the list.</span>');
+  await ctx.resume();
+  stopAll();
+  say("Loading…");
+  try {
+    const d = await loadDeck(song);
+    deck = startDeck(song, d, Number($("start").value) || 0, ctx.currentTime + 0.05);
+    say("");
+    if (!$("b").value) randomNext();
+  } catch (e) {
+    say(`<span class="err">${e.message}</span>`);
   }
 }
 
-async function go() {
-  const a = byLabel($("a").value), b = byLabel($("b").value);
-  if (!a || !b) { $("status").innerHTML = `<span class="err">Pick both songs from the list.</span>`; return; }
+function randomNext() {
+  const cur = deck?.song ?? byLabel($("a").value);
+  const pool = songs.filter((s) => s !== cur && (!cur || rate(cur, s) !== 1));
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  if (pick) {
+    $("b").value = label(pick);
+    fetch(`/prepare?song=${encodeURIComponent(pick.id)}`);
+  }
+}
+
+const say = (html) => { $("status").innerHTML = html; };
+
+async function transition() {
+  const next = byLabel($("b").value);
+  if (!deck) return say('<span class="err">Play a song first.</span>');
+  if (!next) return say('<span class="err">Pick what plays next.</span>');
+  if (busy) return;
+  busy = true;
   $("go").disabled = true;
-  $("status").textContent = "Rendering…";
+  const cur = deck;
+  // Pressed while the last mix is still finishing: this one starts from where it hands over.
+  const here = () => Math.max(deckPos(cur), cur.pos0);
+  say("Listening for the best moment…");
   try {
-    const q = new URLSearchParams({ a: a.id, b: b.id, in: $("in").value, out: $("out").value, pre: $("pre").value, post: $("post").value });
-    const r = await getJson(`/render?${q}`);
-    const plan = `${$("in").value}/${$("out").value}`;
-    current = { ...r, plan };
-    history.unshift(current);
+    const q = new URLSearchParams({ a: cur.song.id, b: next.id, at: String(here()), in: $("in").value, out: $("out").value, mode: $("mode").value });
+    const [r, nextDeck] = await Promise.all([getJson(`/transition?${q}`), loadDeck(next)]);
+    const buf = await ctx.decodeAudioData(await (await fetch(r.wav)).arrayBuffer());
+    if (deck !== cur) throw new Error("Playback changed while choosing.");
+    // Splice the render in where the plain song has got to: the two are the same samples.
+    const spliceAt = Math.max(r.startAt + 0.05, here() + 0.15);
+    const T = cur.t0 + (spliceAt - cur.pos0);
+    const offset = spliceAt - r.startAt + r.aLatencyS;
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    source.connect(ctx.destination);
+    cur.source.stop(T);
+    source.start(T, offset);
+    mix = { r, buf, source, T, offset, from: cur.song, to: next };
+    deck = null;
+    // Once the incoming song is back at its own tempo, hand it to plain playback.
+    if (r.bHandOff) {
+      const S = r.bHandOff.renderT + 0.2;
+      const T2 = T + (S - offset);
+      source.stop(T2);
+      const m = mix;
+      deck = startDeck(next, nextDeck, r.bHandOff.songPos + 0.2, T2);
+      deck.pending = m;
+    }
+    r.label = `${cur.song.title} → ${next.title}`;
+    history.unshift(r);
+    shown = r;
     showScore(r.score);
     showHistory();
-    playFrom(r);
-    $("status").textContent = "";
+    $("a").value = label(next);
+    $("b").value = "";
+    randomNext();
   } catch (e) {
-    $("status").innerHTML = `<span class="err">${e.message}</span>`;
+    say(`<span class="err">${e.message}</span>`);
   } finally {
+    busy = false;
     $("go").disabled = false;
   }
-}
-
-// Start a few seconds before the mix point, once the WAV has loaded enough to seek.
-async function playFrom(r) {
-  const p = $("player");
-  // As a blob, so the player can seek without range requests.
-  r.blob ??= URL.createObjectURL(await (await fetch(r.wav)).blob());
-  p.src = r.blob;
-  p.addEventListener("loadedmetadata", () => {
-    p.currentTime = Math.max(0, r.score.timeline.when - 4);
-    p.play().catch(() => {});
-  }, { once: true });
 }
 
 function showScore(s) {
   const ms = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v} ms`);
   const tight = s.lagMs != null && Math.abs(s.lagMs) <= 20;
   const dip = s.loudness.before - s.loudness.low;
+  const lv = s.levels;
   const rows = [
-    ["A", s.a], ["B", s.b],
+    ["From", s.a], ["Into", s.b],
+    ["Where", `out at ${mmss(s.points.outS)}, in at ${mmss(s.points.inS)} (${s.points.mode}), waited ${s.points.waitS} s`],
+    ["Levels", lv.out == null ? `trims ${lv.outTrim} / ${lv.inTrim} dB` : `${lv.out} dB vs ${lv.in} dB over the overlap (trims ${lv.outTrim} / ${lv.inTrim} dB)`],
     ["Tempo", `${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`],
     ["Key", `${s.keys} ${s.keySteps == null ? "" : s.keySteps <= 1 ? '<span class="good">compatible</span>' : `<span class="bad">${s.keySteps} steps apart</span>`}`],
     ["Beats", `${ms(s.lagMs)} median, drift ${ms(s.driftMs)} <span class="${tight ? "good" : "bad"}">${s.lagMs == null ? "" : tight ? "tight" : "flams"}</span>`],
-    ["Per bar", s.bars.join("  ")],
-    ["Level", `${s.loudness.before} dB before, ${s.loudness.low} to ${s.loudness.high} dB through it ${dip >= 6 ? `<span class="bad">drops ${dip.toFixed(0)} dB</span>` : ""}`],
-    ["Peak", `${s.peakDb} dBFS (louder deck alone ${s.deckPeakDb}) ${s.peakDb > 0 ? '<span class="bad">clips</span>' : ""}`],
-    ["Start", `A ${s.startLatencyMs.a} ms, B ${s.startLatencyMs.b} ms late (stretcher warm-up)`],
-    ["Plan", `B in ${s.timeline.when}s, bass swap ${s.timeline.swap}s, A gone ${s.timeline.end}s`],
+    ["Through it", `${s.loudness.before} dB before, ${s.loudness.low} to ${s.loudness.high} dB ${dip >= 6 ? `<span class="bad">drops ${dip.toFixed(0)} dB</span>` : ""}`],
+    ["Peak", `${s.peakDb} dBFS ${s.peakDb > 0 ? '<span class="bad">clips</span>' : ""}`],
   ];
   $("score").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
@@ -186,19 +261,48 @@ function showHistory() {
   $("history").innerHTML = history.map((h, i) => {
     const s = h.score;
     const tight = s.lagMs != null && Math.abs(s.lagMs) <= 20;
-    return `<li><button data-i="${i}">play</button> ${s.a.split(" · ")[0]} → ${s.b.split(" · ")[0]} <span class="muted">${h.plan}</span> <span class="${tight ? "good" : "bad"}">${s.lagMs ?? "–"} ms</span></li>`;
+    return `<li><button type="button" data-i="${i}">show</button> ${h.label} <span class="muted">waited ${s.points.waitS}s</span> <span class="${tight ? "good" : "bad"}">${s.lagMs ?? "–"} ms</span></li>`;
   }).join("");
 }
 
 $("history").addEventListener("click", (e) => {
   const i = e.target.dataset?.i;
   if (i == null) return;
-  current = history[Number(i)];
-  showScore(current.score);
-  playFrom(current);
+  shown = history[Number(i)];
+  showScore(shown.score);
 });
 
-function draw() {
+function tick() {
+  // What is playing, and what the transition is doing.
+  const m = mix && ctx.currentTime >= mix.T ? mix : null;
+  const t = m ? mixTime(m) : 0;
+  const live = m && (!deck || ctx.currentTime < deck.t0);
+  if (deck && deck.pending && ctx.currentTime >= deck.t0) { deck.pending = null; mix = null; }
+  if (live) {
+    const tl = m.r.score.timeline;
+    const songT = m.r.startAt + t - m.r.aLatencyS;
+    $("nowTitle").textContent = t < tl.swap ? label(m.from) : label(m.to);
+    $("nowPos").textContent = t < tl.swap ? mmss(songT) : "";
+    if (t < tl.when) say(`Mixing in <b>${(tl.when - t).toFixed(1)} s</b>: out of ${m.from.title} at ${mmss(m.r.score.points.outS)}, into ${m.to.title} at ${mmss(m.r.score.points.inS)}.`);
+    else if (t < tl.end) say(`Mixing… ${t < tl.swap ? "bass swap in " + (tl.swap - t).toFixed(1) + " s" : "outgoing song fading"}`);
+    else say(`Into ${m.to.title}. Pick what's next and press Transition again.`);
+  } else if (mix && ctx.currentTime < mix.T) {
+    $("nowTitle").textContent = label(mix.from);
+    $("nowPos").textContent = "";
+  } else if (deck) {
+    const pos = deckPos(deck);
+    $("nowTitle").textContent = label(deck.song);
+    $("nowPos").textContent = `${mmss(Math.max(0, pos))} / ${mmss(deck.song.duration)}`;
+    if (pos > deck.song.duration) { deck = null; say("The song ended."); }
+  } else if (!busy) {
+    $("nowTitle").textContent = "Nothing playing.";
+    $("nowPos").textContent = "";
+  }
+  draw(m ? t : null);
+  requestAnimationFrame(tick);
+}
+
+function draw(t) {
   const c = $("tl"), dpr = devicePixelRatio || 1;
   const w = c.clientWidth, h = c.clientHeight;
   if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
@@ -206,51 +310,61 @@ function draw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-  if (current) {
-    const { total, curves, score } = current;
-    const x = (t) => (t / total) * w;
-    const top = 10, bottom = h - 36, span = bottom - top;
-    g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "11px system-ui";
-    for (const [t, name] of [[score.timeline.when, "B in"], [score.timeline.swap, "bass swap"], [score.timeline.end, "A gone"]]) {
-      g.beginPath(); g.moveTo(x(t), top); g.lineTo(x(t), bottom); g.stroke();
-      g.fillText(name, x(t) + 3, top + 10);
-    }
-    const line = (vals, color, map, alpha = 1, dash = []) => {
-      g.strokeStyle = color; g.globalAlpha = alpha; g.setLineDash(dash); g.lineWidth = 2;
-      g.beginPath();
-      vals.forEach((v, i) => { const px = x(i / 20), py = bottom - map(v) * span; i ? g.lineTo(px, py) : g.moveTo(px, py); });
-      g.stroke(); g.globalAlpha = 1; g.setLineDash([]);
-    };
-    const lvl = (v) => v, cut = (v) => -v / 18 * 0.5;
-    line(curves.master, css("--master"), lvl, 1, [4, 3]);
-    line(curves.aBass, css("--a"), cut, 0.4);
-    line(curves.bBass, css("--b"), cut, 0.4);
-    line(curves.aGain, css("--a"), lvl);
-    line(curves.bGain, css("--b"), lvl);
-    // Per-bar lag: one dot per two-bar window, height by lag (±100 ms).
-    const beat = score.timeline.beat, y0 = h - 16;
-    g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(0, y0); g.lineTo(w, y0); g.stroke();
-    score.bars.forEach((lag, i) => {
-      const t = score.timeline.when + i * 4 * beat + 4 * beat;
-      g.fillStyle = Math.abs(lag) <= 20 ? css("--good") : css("--bad");
-      g.beginPath(); g.arc(x(t), y0 - Math.max(-14, Math.min(14, lag / 100 * 14)), 3.5, 0, 7); g.fill();
+  if (!shown) {
+    g.fillStyle = css("--muted"); g.font = "13px system-ui";
+    g.fillText("The next transition's plan shows here: levels, bass swap and beat lag.", 12, 24);
+    return;
+  }
+  const { curves, score } = shown;
+  const tl = score.timeline;
+  // Show from a few seconds before the mix to a few after it.
+  const t0 = Math.max(0, tl.when - 6), t1 = Math.min(shown.total, tl.end + 6);
+  const x = (s) => ((s - t0) / (t1 - t0)) * w;
+  const top = 10, bottom = h - 36, span = bottom - top;
+  g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "11px system-ui";
+  for (const [s, name] of [[tl.when, "incoming in"], [tl.swap, "bass swap"], [tl.end, "outgoing gone"]]) {
+    g.beginPath(); g.moveTo(x(s), top); g.lineTo(x(s), bottom); g.stroke();
+    g.fillText(name, x(s) + 3, top + 10);
+  }
+  const line = (vals, color, map, alpha = 1, dash = []) => {
+    g.strokeStyle = color; g.globalAlpha = alpha; g.setLineDash(dash); g.lineWidth = 2;
+    g.beginPath();
+    let first = true;
+    vals.forEach((v, i) => {
+      const s = i / 20;
+      if (s < t0 || s > t1) return;
+      const px = x(s), py = bottom - map(v) * span;
+      first ? g.moveTo(px, py) : g.lineTo(px, py);
+      first = false;
     });
-    const t = $("player").currentTime || 0;
+    g.stroke(); g.globalAlpha = 1; g.setLineDash([]);
+  };
+  const lvl = (v) => v, cut = (v) => (-v / 18) * 0.5;
+  line(curves.master, css("--master"), lvl, 1, [4, 3]);
+  line(curves.aBass, css("--a"), cut, 0.4);
+  line(curves.bBass, css("--b"), cut, 0.4);
+  line(curves.aGain, css("--a"), lvl);
+  line(curves.bGain, css("--b"), lvl);
+  const y0 = h - 16;
+  g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(0, y0); g.lineTo(w, y0); g.stroke();
+  score.bars.forEach((lag, i) => {
+    const s = tl.when + (i + 1) * 4 * tl.beat;
+    g.fillStyle = Math.abs(lag) <= 20 ? css("--good") : css("--bad");
+    g.beginPath(); g.arc(x(s), y0 - Math.max(-14, Math.min(14, (lag / 100) * 14)), 3.5, 0, 7); g.fill();
+  });
+  if (t != null && mix && mix.r === shown && t >= t0 && t <= t1) {
     g.strokeStyle = css("--ink"); g.lineWidth = 1.5;
     g.beginPath(); g.moveTo(x(t), 0); g.lineTo(x(t), h); g.stroke();
-  } else {
-    g.fillStyle = css("--muted"); g.font = "13px system-ui";
-    g.fillText("Pick two songs and render to see the hand-over here.", 12, 24);
   }
-  requestAnimationFrame(draw);
 }
 
-$("tl").addEventListener("click", (e) => {
-  if (!current) return;
-  const r = e.target.getBoundingClientRect();
-  $("player").currentTime = ((e.clientX - r.left) / r.width) * current.total;
-  $("player").play().catch(() => {});
-});
+async function loadSongs() {
+  songs = await getJson("/songs");
+  $("songs").innerHTML = songs.map((s) => `<option value="${label(s).replace(/"/g, "&quot;")}">${s.bpm?.toFixed(1)} bpm · ${s.key}</option>`).join("");
+  const first = songs[Math.floor(Math.random() * songs.length)];
+  if (first) $("a").value = label(first);
+  randomNext();
+}
 
 async function ask() {
   $("picks").innerHTML = '<li class="muted">Asking…</li>';
@@ -259,7 +373,7 @@ async function ask() {
     $("picks").innerHTML = (r.artists?.length ? `<li class="muted">Artists heard: ${r.artists.join(", ")}</li>` : "") +
       r.picks.map((p) => {
         const s = songs.find((x) => x.title.toLowerCase() === p.title.toLowerCase());
-        return `<li>${s ? `<button data-b="${s.id}">use as B</button> ` : '<span class="muted">not cached</span> '}${p.title} · ${p.artist} <span class="muted">${(p.langs || []).join(",")} · ${p.score?.toFixed?.(3) ?? ""}</span></li>`;
+        return `<li>${s ? `<button type="button" data-b="${s.id}">play next</button> ` : '<span class="muted">not cached</span> '}${p.title} · ${p.artist} <span class="muted">${(p.langs || []).join(",")} · ${p.score?.toFixed?.(3) ?? ""}</span></li>`;
       }).join("");
   } catch (e) {
     $("picks").innerHTML = `<li class="err">${e.message}</li>`;
@@ -271,12 +385,14 @@ $("picks").addEventListener("click", (e) => {
   if (s) $("b").value = label(s);
 });
 
-$("go").onclick = go;
-$("random").onclick = randomPair;
-$("swap").onclick = () => { const v = $("a").value; $("a").value = $("b").value; $("b").value = v; };
+$("play").onclick = play;
+$("stop").onclick = () => { stopAll(); say(""); };
+$("go").onclick = transition;
+$("random").onclick = randomNext;
 $("ask").onclick = ask;
-loadSongs().then(randomPair).catch((e) => ($("status").innerHTML = `<span class="err">${e.message}</span>`));
-draw();
+$("b").addEventListener("change", () => { const s = byLabel($("b").value); if (s) fetch(`/prepare?song=${encodeURIComponent(s.id)}`); });
+loadSongs().catch((e) => say(`<span class="err">${e.message}</span>`));
+tick();
 </script>
 </body>
 </html>

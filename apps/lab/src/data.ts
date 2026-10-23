@@ -18,6 +18,8 @@ export type LabSong = MixSong & {
   key?: string | null;
   scale?: string | null;
   beatConfidence?: number | null;
+  /** Beat times (s), as analysed. */
+  beats?: number[] | null;
   stemsInS?: number | null;
   stemsOutS?: number | null;
   audioUrl: string;

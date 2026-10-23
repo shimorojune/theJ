@@ -27,7 +27,7 @@ export function stretchDeck(
   frames: number,
   sampleRate: number,
   rateAt: (frame: number) => number,
-): Float32Array[] {
+): Float32Array[] & { latency: number } {
   const channels = src.length;
   let windowSize = framesFromMs(sampleRate, OLA_WINDOW_MS);
   windowSize += windowSize & 1;
@@ -49,6 +49,8 @@ export function stretchDeck(
   const queue = src.map(() => new Float32Array(frames + hop * 4 + QUANTUM * 4));
   let produced = 0;
   let read = 0;
+  // Output frame the first produced frame (input frame 0, faded in) is written to.
+  let latency = -1;
   const pending = src.map(() => new Float32Array(hop));
   const target = src.map(() => new Float32Array(windowSize));
   const optimal = src.map(() => new Float32Array(windowSize));
@@ -173,6 +175,7 @@ export function stretchDeck(
   const write = (offset: number, n: number): number => {
     const k = Math.min(n, produced - read, frames - offset);
     if (k <= 0) return 0;
+    if (latency < 0) latency = offset - read;
     for (let ch = 0; ch < channels; ch++)
       (out[ch] as Float32Array).set((queue[ch] as Float32Array).subarray(read, read + k), offset);
     read += k;
@@ -191,5 +194,5 @@ export function stretchDeck(
     }
     if (rate < 1 && rendered >= n && produced - read < n * 2) runOne(rate);
   }
-  return out;
+  return Object.assign(out, { latency: Math.max(0, latency) });
 }

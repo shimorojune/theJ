@@ -1,9 +1,14 @@
 import { readFile, writeFile } from "node:fs/promises";
 import {
   apply,
+  audioPeakDb,
   BASS_HZ,
+  beatLoudness,
   camelot,
   camelotLabel,
+  chooseMixPoints,
+  type Features,
+  fitToOnsets,
   type HandOver,
   keySteps,
   MIX,
@@ -12,11 +17,12 @@ import {
   type Plan,
   planHandOver,
   songBeat,
+  songTrim,
   valueAt,
 } from "@thej/mix";
 import { OfflineAudioContext } from "node-web-audio-api";
 import { audioPath, type LabSong } from "./data";
-import { barLags, loudness, median, onsetEnvelope, peakDb } from "./metrics";
+import { barLags, ENV_HZ, loudness, median, onsetEnvelope, peakDb } from "./metrics";
 import { stretchDeck } from "./wsola";
 
 /** Android's usual output rate; the phone's AudioContext runs at the device rate. */
@@ -34,18 +40,59 @@ export function loadAudio(song: LabSong): Promise<Float32Array[]> {
       const buf = await ctx.decodeAudioData(
         bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
       );
-      return Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c));
+      // Copied out: the views point into memory the decode context owns, which is reused once
+      // it is collected (long benches rendered other songs' audio).
+      return Array.from(
+        { length: buf.numberOfChannels },
+        (_, c) => new Float32Array(buf.getChannelData(c)),
+      );
     })();
     decoded.set(song.songId, p);
   }
   return p;
 }
 
+/** A song's beats and the loudness of each, plus the level trim it plays with. */
+export type SongFeatures = Features & { trimDb: number; onsets: Float64Array };
+const features = new Map<string, Promise<SongFeatures>>();
+export function songFeatures(song: LabSong): Promise<SongFeatures> {
+  let p = features.get(song.songId);
+  if (!p) {
+    p = loadAudio(song).then((x) => {
+      const beats = song.beats ?? [];
+      const loud = beatLoudness(x, SR, beats);
+      return {
+        beats,
+        loud,
+        duration: (x[0]?.length ?? 0) / SR,
+        mixInS: song.mixInS,
+        mixOutS: song.mixOutS,
+        trimDb: songTrim(loud, audioPeakDb(x)),
+        onsets: onsetEnvelope(x, SR),
+      };
+    });
+    features.set(song.songId, p);
+  }
+  return p;
+}
+
 export type RenderOptions = {
   plan?: Plan;
-  /** Seconds of the outgoing song before the mix, and of the incoming one after it. */
+  /**
+   * "choose" (default): wait for the best pair of mix points from `from` (chooseMixPoints).
+   * "analysed": the server's mix-out and mix-in points, as the phone does today.
+   */
+  mode?: "choose" | "analysed";
+  /** Outgoing song time the listener asks for the next song (default 30 s before its mix-out). */
+  from?: number;
+  maxWait?: number;
+  /** Outgoing song time the render starts (default `pre` s before the mix). */
+  startAt?: number;
   pre?: number;
+  /** Seconds after the hand-over ends. */
   post?: number;
+  /** Bring both songs to the same typical level (songTrim). Default on. */
+  trim?: boolean;
 };
 
 export type Score = {
@@ -56,6 +103,10 @@ export type Score = {
   rate: number;
   keys: string;
   keySteps: number | null;
+  /** Where the mix happens: outgoing and incoming song times (s), and the wait from `from`. */
+  points: { mode: string; outS: number; inS: number; waitS: number };
+  /** Each song's level over the overlap and its trim (dB). */
+  levels: { out: number | null; in: number | null; outTrim: number; inTrim: number };
   /** Median lag of B's beats behind A's over the overlap (ms), drift first bar to last, per bar. */
   lagMs: number | null;
   driftMs: number | null;
@@ -68,6 +119,7 @@ export type Score = {
   deckPeakDb: number;
   /** Loudness from the mix point to 4 s after it, against the 4 s before it (dB, 1 s steps). */
   loudness: { before: number; low: number; high: number };
+  /** Render times (s from its start). */
   timeline: { when: number; swap: number; end: number; beat: number };
 };
 
@@ -78,37 +130,92 @@ export type Render = {
   deckB: Float32Array[];
   plan: HandOver;
   score: Score;
+  /** Outgoing song time at render time 0, and how late its audio is (s): render time t plays
+   * the outgoing song at startAt + t - aLatencyS (until the mix). */
+  startAt: number;
+  aLatencyS: number;
+  /**
+   * Where the render hands the incoming song back to plain playback: at render time `renderT`
+   * (tempo eased back, so the stretcher passes it through unchanged) it plays the incoming song
+   * at `songPos`, found by matching the samples. `match` near 1 means sample-exact.
+   */
+  bHandOff: { renderT: number; songPos: number; match: number } | null;
 };
 
+/** Where `seg` sits in `raw`, within `radius` frames of `guess` (normalised cross-correlation). */
+function locate(raw: Float32Array, seg: Float32Array, guess: number, radius: number) {
+  let segE = 0;
+  for (const v of seg) segE += v * v;
+  let best = { pos: guess, c: Number.NEGATIVE_INFINITY };
+  for (
+    let s = Math.max(0, guess - radius);
+    s <= guess + radius && s + seg.length <= raw.length;
+    s++
+  ) {
+    let dot = 0;
+    let e = 0;
+    for (let k = 0; k < seg.length; k++) {
+      const r = raw[s + k] as number;
+      dot += r * (seg[k] as number);
+      e += r * r;
+    }
+    const c = dot / Math.sqrt(e * segE + 1e-12);
+    if (c > best.c) best = { pos: s, c };
+  }
+  return best;
+}
+
 /**
- * One hand-over from `a` into `b`, as the phone plays it at the end of a song: A plays at its
- * own tempo, the mix timer fires on time, B comes in on A's mix-out beat. Both decks go through
- * the phone's stretcher, then the planned gains, bass shelves and master dip are played by Web
- * Audio. Time 0 is `pre` seconds before A's mix-out.
+ * One hand-over from `a` into `b`, as the phone would play it: A plays at its own tempo from
+ * `startAt`, the mix timer fires on time, B comes in on A's beat at the chosen point. Both decks
+ * go through the phone's stretcher, then the planned gains, bass shelves and master dip are
+ * played by Web Audio.
  */
 export async function renderHandOver(
   a: LabSong,
   b: LabSong,
   opts: RenderOptions = {},
 ): Promise<Render> {
-  const [xa, xb] = await Promise.all([loadAudio(a), loadAudio(b)]);
-  const pre = Math.min(opts.pre ?? 16, a.mixOutS as number);
-  const post = opts.post ?? 16;
-  const posA0 = (a.mixOutS as number) - pre;
+  const [xa, xb, fa, fb] = await Promise.all([
+    loadAudio(a),
+    loadAudio(b),
+    songFeatures(a),
+    songFeatures(b),
+  ]);
+  const plan = opts.plan ?? MIX;
+  const trim = opts.trim ?? true;
+  const outTrim = trim ? fa.trimDb : 0;
+  const inTrim = trim ? fb.trimDb : 0;
+  const mode = opts.mode ?? "choose";
+  const from = opts.from ?? Math.max(0, (a.mixOutS as number) - 30);
+  const chosen =
+    mode === "choose"
+      ? chooseMixPoints(fa, fb, { from, maxWait: opts.maxWait, plan, outTrim, inTrim })
+      : null;
+  // Chosen points sit on the analysed beats; the grid there is then fitted to the audio, as the
+  // server fits it at its own mix points.
+  const span = plan.in + plan.out;
+  const outFit =
+    chosen &&
+    fitToOnsets(fa.onsets, ENV_HZ, chosen.outS - 8 * chosen.outBeatS, chosen.outBeatS, span + 8);
+  const inFit = chosen && fitToOnsets(fb.onsets, ENV_HZ, chosen.inS, chosen.inBeatS, span + 8);
+  const outS = outFit ? outFit.t + 8 * outFit.beat : (a.mixOutS as number);
+  const inOffset = inFit?.t ?? b.mixInS ?? 0;
+  const beat = outFit?.beat ?? songBeat(a, "out") ?? 0.6;
+  const inBeat = inFit?.beat ?? songBeat(b, "in");
+  const startAt = Math.max(0, opts.startAt ?? outS - (opts.pre ?? 16));
 
-  // MixerEngine.scheduleMix: wake a beat and 0.4 s early, then the mix-out beat itself.
-  const beat = songBeat(a, "out") ?? 0.6;
-  const anchor = pre;
-  const now = anchor - beat - 0.4;
+  // MixerEngine.scheduleMix: wake a beat and 0.4 s early, then the mix beat itself (or the
+  // next bar, if that moment has passed).
+  const anchor = outS - startAt;
+  const now = Math.max(0, anchor - beat - 0.4);
   const when = onGrid(anchor, beat * 4, now + beat + 0.05);
-  const inBeat = songBeat(b, "in");
   const rate = inBeat ? matchRate(beat, 1, inBeat) : 1;
-  const inOffset = b.mixInS ?? 0;
-  const h = planHandOver({ when, plan: opts.plan ?? MIX, beat, rate, inOffset, master: 1 });
+  const h = planHandOver({ when, plan, beat, rate, inOffset, master: 1 });
 
-  const total = h.end + post;
+  const total = h.end + (opts.post ?? 16);
   const frames = Math.ceil(total * SR);
-  const deckA = stretchDeck(xa, Math.round(posA0 * SR), frames, SR, () => 1);
+  const deckA = stretchDeck(xa, Math.round(startAt * SR), frames, SR, () => 1);
   const whenF = Math.round(when * SR);
   const ease = h.incoming.easeBack;
   const deckBRaw = stretchDeck(xb, Math.round(inOffset * SR), frames - whenF, SR, (f) =>
@@ -123,7 +230,7 @@ export async function renderHandOver(
   const ctx = new OfflineAudioContext(2, frames, SR);
   const master = ctx.createGain();
   master.connect(ctx.destination);
-  const deck = (x: Float32Array[]) => {
+  const deck = (x: Float32Array[], trimDb: number) => {
     const buf = ctx.createBuffer(2, frames, SR);
     for (let c = 0; c < 2; c++)
       buf.copyToChannel(x[Math.min(c, x.length - 1)] as Float32Array<ArrayBuffer>, c);
@@ -133,14 +240,18 @@ export async function renderHandOver(
     filter.type = "lowshelf";
     filter.frequency.value = BASS_HZ;
     filter.gain.value = 0;
+    // The song's level trim, ahead of the planned gains.
+    const level = ctx.createGain();
+    level.gain.value = 10 ** (trimDb / 20);
     const gain = ctx.createGain();
     source.connect(filter);
-    filter.connect(gain);
+    filter.connect(level);
+    level.connect(gain);
     gain.connect(master);
     return { source, filter, gain };
   };
-  const A = deck(deckA);
-  const B = deck(deckB);
+  const A = deck(deckA, outTrim);
+  const B = deck(deckB, inTrim);
   apply(master.gain, h.master);
   apply(A.gain.gain, h.outgoing?.gain);
   apply(A.filter.gain, h.outgoing?.bass);
@@ -150,7 +261,20 @@ export async function renderHandOver(
   A.source.stop(h.outgoing?.stopAt ?? total);
   B.source.start(0);
   const out = await ctx.startRendering();
-  const mix = [out.getChannelData(0), out.getChannelData(1)];
+  const mix = [0, 1].map((c) => new Float32Array(out.getChannelData(c)));
+
+  let bHandOff: Render["bHandOff"] = null;
+  const handT = h.end + (ease ? ease.dur : 0) + 1;
+  if (handT + 0.2 < total) {
+    // Song position by the planned tempo, then pinned to the sample by matching.
+    const easeS = ease ? ease.dur : 0;
+    const played = rate * (h.end - when) + ((rate + 1) / 2) * easeS + (handT - h.end - easeS);
+    const guess = Math.round((inOffset + played) * SR) - deckBRaw.latency;
+    const f = Math.round((handT - when) * SR);
+    const seg = (deckBRaw[0] as Float32Array).subarray(f, f + 2048);
+    const at = locate(xb[0] as Float32Array, seg, guess, Math.round(0.06 * SR));
+    bHandOff = { renderT: handT, songPos: at.pos / SR, match: Math.round(at.c * 1e4) / 1e4 };
+  }
 
   const envA = onsetEnvelope(deckA, SR);
   const envB = onsetEnvelope(deckB, SR);
@@ -158,14 +282,8 @@ export async function renderHandOver(
   const ka = camelot(a.key, a.scale);
   const kb = camelot(b.key, b.scale);
   const loud = loudness(mix, SR, Math.max(0, h.when - 4), Math.min(total, h.end + 4));
-  const before = loud.slice(0, 4);
-  const during = loud.slice(4);
-  const lead = (x: Float32Array[]) => {
-    const ch = x[0] as Float32Array;
-    let i = 0;
-    while (i < ch.length && Math.abs(ch[i] as number) < 1e-6) i++;
-    return Math.round((i / SR) * 1000);
-  };
+  const before = loud.slice(0, Math.min(4, Math.floor(h.when)));
+  const during = loud.slice(before.length);
   const r1 = (x: number) => Math.round(x * 10) / 10;
   const overlap = (x: Float32Array[]) =>
     x.map((c) => c.subarray(Math.round(h.when * SR), Math.round(h.end * SR)));
@@ -176,6 +294,9 @@ export async function renderHandOver(
     deckA,
     deckB,
     plan: h,
+    startAt,
+    aLatencyS: deckA.latency / SR,
+    bHandOff,
     score: {
       a: `${a.title} · ${a.artist}`,
       b: `${b.title} · ${b.artist}`,
@@ -183,6 +304,18 @@ export async function renderHandOver(
       rate: Math.round(rate * 10000) / 10000,
       keys: `${camelotLabel(ka)} → ${camelotLabel(kb)}`,
       keySteps: ka && kb ? keySteps(ka, kb) : null,
+      points: {
+        mode: chosen ? "chosen" : "analysed",
+        outS: r1(startAt + when),
+        inS: r1(inOffset),
+        waitS: r1(Math.max(0, startAt + when - from)),
+      },
+      levels: {
+        out: chosen ? r1(chosen.outLoud) : null,
+        in: chosen ? r1(chosen.inLoud) : null,
+        outTrim: r1(outTrim),
+        inTrim: r1(inTrim),
+      },
       lagMs: bars.length ? median(bars) : null,
       // Second half of the overlap against the first: one bar locking off-beat doesn't move it.
       driftMs:
@@ -190,12 +323,21 @@ export async function renderHandOver(
           ? median(bars.slice(bars.length >> 1)) - median(bars.slice(0, bars.length >> 1))
           : null,
       bars,
-      startLatencyMs: { a: lead(deckA), b: lead(deckBRaw) },
+      startLatencyMs: {
+        a: Math.round((deckA.latency / SR) * 1000),
+        b: Math.round((deckBRaw.latency / SR) * 1000),
+      },
       peakDb: r1(peakDb(overlap(mix))),
       deckPeakDb: r1(Math.max(peakDb(overlap(deckA)), peakDb(overlap(deckB)))),
       loudness: {
         before: r1(before.reduce((s, v) => s + v, 0) / Math.max(1, before.length)),
-        low: r1(Math.min(...during)),
+        // Over two seconds, so one quiet beat doesn't read as a hole.
+        low: r1(
+          Math.min(
+            ...during.slice(1).map((v, i) => ((during[i] as number) + v) / 2),
+            ...(during.length < 2 ? during : []),
+          ),
+        ),
         high: r1(Math.max(...during)),
       },
       timeline: {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { camelot, camelotLabel, keySteps } from "./camelot";
+import { chooseMixPoints, songTrim } from "./choose";
 import { MIX, MIX_HEADROOM, matchRate, onGrid, planHandOver, valueAt } from "./plan";
 
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
@@ -84,4 +85,29 @@ test("camelot wheel", () => {
   assert.ok(c && g && fs);
   assert.equal(keySteps(c, g), 1);
   assert.equal(keySteps(c, fs), 6);
+});
+
+test("chooser skips a quiet intro for the part as loud as the outgoing song", () => {
+  const grid = (n: number, beat: number) => Array.from({ length: n }, (_, i) => i * beat);
+  const a = {
+    beats: grid(400, 0.5),
+    loud: Array(400).fill(-10),
+    duration: 200,
+    mixOutS: 180,
+    mixInS: 0,
+  };
+  // B: 64 beats of quiet intro, then as loud as A.
+  const bLoud = Array.from({ length: 400 }, (_, i) => (i < 64 ? -30 : -10));
+  const b = { beats: grid(400, 0.5), loud: bLoud, duration: 200, mixOutS: 180, mixInS: 0 };
+  const p = chooseMixPoints(a, b, { from: 100, plan: MIX });
+  assert.ok(p);
+  assert.ok(p.inS >= 32, `came in at ${p.inS}s, inside the quiet intro`);
+  assert.ok(p.outS >= 100 && p.outS <= 140);
+  close(p.outLoud - p.inLoud, 0);
+});
+
+test("trims bring songs to one level without pushing peaks past -1 dBFS", () => {
+  assert.equal(songTrim(Array(100).fill(-8), -0.2), -4);
+  assert.equal(songTrim(Array(100).fill(-20), -6), 4);
+  assert.equal(songTrim(Array(100).fill(-20), -2), 1);
 });

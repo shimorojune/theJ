@@ -8,9 +8,9 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { camelot, camelotLabel, type Schedule, songBeat, valueAt } from "@thej/mix";
+import { camelot, camelotLabel, EASE_BACK_S, type Schedule, songBeat, valueAt } from "@thej/mix";
 import { apiGet, find, type LabSong, library } from "./data";
-import { renderHandOver, SR, wavBytes } from "./render";
+import { loadAudio, renderHandOver, SR, songFeatures, wavBytes } from "./render";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Rendered mixes by id, newest last; a handful is plenty for A/B listening. */
@@ -23,14 +23,22 @@ const curve = (s: Schedule | undefined, total: number, initial: number) =>
     s ? Math.round(valueAt(s, i / 20, initial) * 1000) / 1000 : initial,
   );
 
-async function render(q: URLSearchParams) {
+/**
+ * The listener asked for `b` while `a` plays at `at` (s): choose the mix points from a few
+ * seconds on (time to render and send), and render from just after `at` until `b` plays at
+ * its own tempo again, so the page can splice it in and hand back to plain playback.
+ */
+async function transition(q: URLSearchParams) {
   const songs = await library();
   const a = find(songs, q.get("a") ?? "");
   const b = find(songs, q.get("b") ?? "");
+  const at = Number(q.get("at") ?? 0);
   const r = await renderHandOver(a, b, {
     plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 8) },
-    pre: Number(q.get("pre") ?? 12),
-    post: Number(q.get("post") ?? 12),
+    mode: q.get("mode") === "analysed" ? "analysed" : "choose",
+    from: at + 5,
+    startAt: at + 0.3,
+    post: EASE_BACK_S + 3.5,
   });
   const id = String(++seq);
   wavs.set(id, wavBytes(r.mix));
@@ -40,6 +48,9 @@ async function render(q: URLSearchParams) {
   return {
     wav: `/wav/${id}`,
     total,
+    startAt: r.startAt,
+    aLatencyS: r.aLatencyS,
+    bHandOff: r.bHandOff,
     score: r.score,
     curves: {
       aGain: curve(h.outgoing?.gain, total, 1),
@@ -61,6 +72,8 @@ function songRow(s: LabSong) {
     key: camelotLabel(camelot(s.key, s.scale)),
     inBeat: songBeat(s, "in"),
     outBeat: songBeat(s, "out"),
+    duration: s.durationS,
+    mixOutS: s.mixOutS,
   };
 }
 
@@ -78,7 +91,24 @@ export function serve(port: number) {
         return res.end(await readFile(join(HERE, "page.html")));
       }
       if (url.pathname === "/songs") return json(res, (await library()).map(songRow));
-      if (url.pathname === "/render") return json(res, await render(url.searchParams));
+      if (url.pathname === "/transition") return json(res, await transition(url.searchParams));
+      // A whole song as plain audio, decoded as the renders decode it, with its level trim.
+      if (url.pathname === "/deck") {
+        const song = find(await library(), url.searchParams.get("song") ?? "");
+        const [x, f] = await Promise.all([loadAudio(song), songFeatures(song)]);
+        const body = wavBytes(x);
+        res.writeHead(200, {
+          "Content-Type": "audio/wav",
+          "Content-Length": body.length,
+          "X-Trim-Db": String(f.trimDb),
+        });
+        return res.end(body);
+      }
+      // Work out a song's beats and loudness ahead of its first transition.
+      if (url.pathname === "/prepare") {
+        await songFeatures(find(await library(), url.searchParams.get("song") ?? ""));
+        return json(res, { ok: true });
+      }
       if (url.pathname === "/pick") {
         const q = new URLSearchParams({
           text: url.searchParams.get("text") ?? "dance party",
