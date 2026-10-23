@@ -296,16 +296,11 @@ export type PairTraits = {
 };
 
 /**
- * The switch a DJ would pick for this pair:
- *   tempos too far apart to match      echo the old song out, drop the new one on the one
- *   keys that clash (3+ Camelot steps) no melodic overlap: thin the old one with a filter,
- *                                      switch on the one
- *   new song comes in 3 dB hotter      a straight cut on the one: let it hit
- *   otherwise                          a long blend with a bass swap
+ * The switch for this pair: a blend with a bass swap whenever the tempos can be matched
+ * (Rohit, 2026-10-23: of the four styles rendered on one pair, the blend "absolutely nailed
+ * it" and the other three were not good, even though the keys clashed), and an echo out when
+ * they can't. Filter and cut stay available when asked for by name.
  */
 export function chooseStyle(t: PairTraits): Style {
-  if (!t.matched) return "echo";
-  if (t.keySteps != null && t.keySteps >= 3) return "filter";
-  if (t.levelJumpDb >= 3) return "cut";
-  return "blend";
+  return t.matched ? "blend" : "echo";
 }
