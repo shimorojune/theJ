@@ -4,7 +4,7 @@
  * songs are equally loud and their beats are steady, and wait for it. The listener asks for the
  * next song; the DJ picks the moment.
  */
-import { matchRate, type Plan } from "./plan";
+import { matchRate, type Plan, type Style } from "./plan";
 
 /** What the chooser knows about a song: its beat times and how loud each beat is. */
 export type Features = {
@@ -45,6 +45,8 @@ export type MixPoints = {
   /** Loudness (dB, trims included) of each song over the overlap. */
   outLoud: number;
   inLoud: number;
+  /** The incoming song's level (dB, trimmed) on its own just after the switch. */
+  inAfterLoud: number;
   /** Beat wobble (ms, RMS off a straight grid) over each window. */
   outJitterMs: number;
   inJitterMs: number;
@@ -158,7 +160,8 @@ const nearest = (beats: number[], t: number) => {
  * Null when either song has too few beats to mix on.
  */
 export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): MixPoints | null {
-  const span = o.plan.in + o.plan.out;
+  // Even a straight switch is judged on a couple of bars either side of it.
+  const span = Math.max(8, o.plan.in + o.plan.out);
   const outSpan = o.loopBeats ?? span;
   const maxWait = o.maxWait ?? 40;
   if (a.beats.length < span + 8 || b.beats.length < span + 24) return null;
@@ -208,6 +211,9 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
       const lb = mean(b.loud, j, j + span) + inTrim;
       // The incoming song alone, right after the switch: it must hold the floor at once.
       const after = mean(b.loud, j + o.plan.in, j + o.plan.in + 16) + inTrim;
+      // And the beats either side of the switch itself: a short breakdown there is a hole the
+      // longer averages miss.
+      const atSwitch = mean(b.loud, j + o.plan.in - 4, j + o.plan.in + 8) + inTrim;
       const matched = matchRate(ga.beat, 1, gb.beat) !== 1 || Math.abs(ga.beat - gb.beat) < 1e-4;
       const outS = ga.t;
       const inS = gb.t;
@@ -217,6 +223,7 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
         below(bUsual, lb) +
         below(lead, la) +
         Math.max(0, la - after - 1.5) +
+        Math.max(0, la - atSwitch - 1.5) +
         (ga.jitterMs + gb.jitterMs) / 5 +
         (matched ? 0 : 6) +
         0.04 * Math.max(0, outS - o.from) +
@@ -230,6 +237,7 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
           waitS: Math.max(0, outS - o.from),
           outLoud: la,
           inLoud: lb,
+          inAfterLoud: after,
           outJitterMs: ga.jitterMs,
           inJitterMs: gb.jitterMs,
           cost,
@@ -275,4 +283,29 @@ export function fitToOnsets(
     if (e > best.e) best = { ...best, e, t: best.t + d / 1000 };
   }
   return { t: best.t, beat: best.beat };
+}
+
+/** What decides how a pair is switched. */
+export type PairTraits = {
+  /** The tempos are close enough to beat-match (matchRate). */
+  matched: boolean;
+  /** Camelot steps between the keys; null when either key is unknown. */
+  keySteps: number | null;
+  /** The incoming song's level just after the switch minus the outgoing one's (dB). */
+  levelJumpDb: number;
+};
+
+/**
+ * The switch a DJ would pick for this pair:
+ *   tempos too far apart to match      echo the old song out, drop the new one on the one
+ *   keys that clash (3+ Camelot steps) no melodic overlap: thin the old one with a filter,
+ *                                      switch on the one
+ *   new song comes in 3 dB hotter      a straight cut on the one: let it hit
+ *   otherwise                          a long blend with a bass swap
+ */
+export function chooseStyle(t: PairTraits): Style {
+  if (!t.matched) return "echo";
+  if (t.keySteps != null && t.keySteps >= 3) return "filter";
+  if (t.levelJumpDb >= 3) return "cut";
+  return "blend";
 }

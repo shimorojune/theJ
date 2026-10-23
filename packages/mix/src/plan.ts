@@ -7,10 +7,10 @@
 
 /**
  * A planned mix: the next song comes up beat-matched under the current one with its bass cut
- * for IN beats; on the swap beat the current song is cut away within OUT beats, as a DJ
- * switches, rather than left fading over the new one.
+ * for IN beats; on the swap beat the current song is cut away (OUT 0), as a DJ switches,
+ * rather than left fading over the new one.
  */
-export const MIX = { in: 16, out: 1 };
+export const MIX = { in: 16, out: 0 };
 /** A skip is the same move, just fast. */
 export const SKIP = { in: 2, out: 2 };
 /** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
@@ -44,6 +44,14 @@ export const EASE_BACK_S = 20;
 
 export type Plan = { in: number; out: number };
 
+export type Style = "blend" | "filter" | "cut" | "echo";
+/** The outgoing song leaves this long (s) before the incoming downbeat. */
+export const SWITCH_S = 0.03;
+/** Beats the filter style thins the outgoing song over before the switch. */
+export const FILTER_BEATS = 8;
+export const ECHO_FEEDBACK = 0.45;
+export const ECHO_TAIL_BEATS = 8;
+
 /** What the planner needs to know about a song: its analysis. */
 export type MixSong = {
   bpm?: number | null;
@@ -54,8 +62,11 @@ export type MixSong = {
   mixOutBeatS?: number | null;
 };
 
-/** One automation step: hold `v` from `t`, or (with `ramp`) reach `v` linearly by `t`. */
-export type Step = { t: number; v: number; ramp?: true };
+/**
+ * One automation step: hold `v` from `t`, or reach `v` by `t` linearly (`ramp`) or
+ * exponentially (`exp`, for frequencies; both values above 0).
+ */
+export type Step = { t: number; v: number; ramp?: true; exp?: true };
 /** One param's moves: first drop whatever was scheduled from `cancel` on, then the steps. */
 export type Schedule = { cancel?: number; steps: Step[] };
 
@@ -64,13 +75,15 @@ export interface ParamLike {
   cancelScheduledValues(t: number): unknown;
   setValueAtTime(v: number, t: number): unknown;
   linearRampToValueAtTime(v: number, t: number): unknown;
+  exponentialRampToValueAtTime(v: number, t: number): unknown;
 }
 
 export function apply(param: ParamLike, s: Schedule | undefined) {
   if (!s) return;
   if (s.cancel != null) param.cancelScheduledValues(s.cancel);
-  for (const { t, v, ramp } of s.steps) {
-    if (ramp) param.linearRampToValueAtTime(v, t);
+  for (const { t, v, ramp, exp } of s.steps) {
+    if (exp) param.exponentialRampToValueAtTime(v, t);
+    else if (ramp) param.linearRampToValueAtTime(v, t);
     else param.setValueAtTime(v, t);
   }
 }
@@ -85,9 +98,10 @@ export function valueAt(s: Schedule, t: number, initial = 0): number {
       at = step.t;
       continue;
     }
-    return step.ramp && at > Number.NEGATIVE_INFINITY
-      ? v + ((step.v - v) * (t - at)) / (step.t - at)
-      : v;
+    if (at === Number.NEGATIVE_INFINITY) return v;
+    const u = (t - at) / (step.t - at);
+    if (step.exp && v > 0 && step.v > 0) return v * (step.v / v) ** u;
+    return step.ramp ? v + (step.v - v) * u : v;
   }
   return v;
 }
@@ -147,6 +161,8 @@ export type HandOverInput = {
   master: number | null;
   /** Both songs' stems for this mix; null or missing for the classic hand-over. */
   stems?: StemInput | null;
+  /** How to switch (chooseStyle); a blend by default. */
+  style?: Style;
   /**
    * Loop the outgoing song from the mix point while the incoming one comes in, as a DJ sets up
    * a switch; with `roll` the loop halves over the last bar (2, 1, half a beat) into the swap.
@@ -183,11 +199,14 @@ export type HandOver = {
   rate: number;
   inS: number;
   outS: number;
+  style: Style;
   master?: Schedule;
   incoming: {
     offset: number;
     gain: Schedule;
     bass: Schedule;
+    /** Low-pass cutoff (Hz) for the filter style; open (none) otherwise. */
+    lowpass?: Schedule;
     /** The tempo easing back to the song's own once it owns the floor; null at rate 1. */
     easeBack: { at: number; dur: number; rate: Schedule } | null;
   };
@@ -196,6 +215,13 @@ export type HandOver = {
     gain: Schedule;
     bass?: Schedule;
     stopAt: number;
+    /** High-pass cutoff (Hz) for the filter style. */
+    highpass?: Schedule;
+    /**
+     * Echo out: the outgoing deck feeds a delay of `delayS` with `feedback` through `send`; the
+     * echo rings until `until`, after the deck itself has stopped.
+     */
+    echo?: { delayS: number; feedback: number; send: Schedule; until: number };
     /** Loop regions in order, and when the loop lets go (the song plays on from there). */
     loop?: { steps: LoopStep[]; releaseAt: number };
   };
@@ -203,20 +229,34 @@ export type HandOver = {
 };
 
 /**
- * Bring the incoming song in at `when`, tempo-matched, bass cut. After `plan.in` beats the bass
- * swaps and the outgoing song drops out over `plan.out` beats. With stems for both songs the
- * hand-over is done stem by stem instead (stemHandOver).
+ * One switch from the outgoing song to the incoming one, in the style a DJ would pick for the
+ * pair (chooseStyle):
+ *   blend   the incoming song comes up under the outgoing one over `plan.in` beats, bass cut,
+ *           and takes over on the swap beat (with stems for both songs, stem by stem instead)
+ *   filter  the outgoing song thins out through a rising high-pass over FILTER_BEATS beats; the
+ *           incoming one drops in on the one with its highs opening over a bar
+ *   cut     a straight switch on the one
+ *   echo    the outgoing song's last beat echoes out under the incoming one, which drops in on
+ *           the one at its own tempo
+ * In every style the outgoing song leaves just before the incoming downbeat, never on it.
  */
 export function planHandOver(i: HandOverInput): HandOver {
-  const { when, beat, rate } = i;
-  const inS = Math.min(14, i.plan.in * beat);
+  const { when, beat } = i;
+  const style = i.style ?? "blend";
+  // Echo out drops the new song on the one at its own tempo: no stretching to match.
+  const rate = style === "echo" ? 1 : i.rate;
+  // Only a blend runs the new song under the old one; the others switch at `when`.
+  const inS = style === "blend" ? Math.min(14, i.plan.in * beat) : 0;
   const outS = Math.min(8, i.plan.out * beat);
   const swap = when + inS;
   const stems =
-    i.master != null && i.stems
+    style === "blend" && i.master != null && i.stems
       ? stemHandOver(i.stems, when, rate, i.inOffset, inS, outS, beat)
       : null;
   const end = swap + outS + (stems ? beat : 0);
+  // A clean switch: the old song is gone just before the new song's downbeat, so the two
+  // downbeats never land together (a flam, or a doubled beat).
+  const cutAt = Math.max(when, swap - SWITCH_S);
 
   const h: HandOver = {
     when,
@@ -226,37 +266,47 @@ export function planHandOver(i: HandOverInput): HandOver {
     rate,
     inS,
     outS,
-    incoming: stems
-      ? {
-          offset: i.inOffset,
-          // The stems carry the hand-over; the full song takes over from them as it ends.
-          gain: {
-            steps: [
-              { t: when, v: 0 },
-              { t: end - beat, v: 0 },
-              { t: end, v: 1, ramp: true },
-            ],
-          },
-          bass: { steps: [] },
-          easeBack: null,
-        }
-      : {
-          offset: i.inOffset,
-          gain: {
-            steps: [
-              { t: when, v: 0 },
-              { t: swap, v: 1, ramp: true },
-            ],
-          },
-          bass: {
-            steps: [
-              { t: when, v: BASS_CUT_DB },
-              { t: swap + beat, v: 0, ramp: true },
-            ],
-          },
-          easeBack: null,
-        },
+    style,
+    incoming: {
+      offset: i.inOffset,
+      gain: { steps: [{ t: when, v: 1 }] },
+      bass: { steps: [] },
+      easeBack: null,
+    },
   };
+  if (stems) {
+    // The stems carry the hand-over; the full song takes over from them as it ends.
+    h.incoming.gain = {
+      steps: [
+        { t: when, v: 0 },
+        { t: end - beat, v: 0 },
+        { t: end, v: 1, ramp: true },
+      ],
+    };
+  } else if (style === "blend" && inS > 0) {
+    // Up under the old song, bass cut, at full level by the switch.
+    h.incoming.gain = {
+      steps: [
+        { t: when, v: 0 },
+        { t: cutAt, v: 1, ramp: true },
+      ],
+    };
+    h.incoming.bass = {
+      steps: [
+        { t: when, v: BASS_CUT_DB },
+        { t: cutAt, v: BASS_CUT_DB },
+        { t: swap, v: 0, ramp: true },
+      ],
+    };
+  } else if (style === "filter") {
+    // In on the one with its highs closed, opening over a bar.
+    h.incoming.lowpass = {
+      steps: [
+        { t: swap, v: 300 },
+        { t: swap + 4 * beat, v: 20000, exp: true },
+      ],
+    };
+  }
   if (rate !== 1)
     h.incoming.easeBack = {
       at: end,
@@ -279,37 +329,71 @@ export function planHandOver(i: HandOverInput): HandOver {
       { t: when + beat, v: 1, ramp: true },
     ],
   };
-  h.outgoing = stems
-    ? {
-        // Outgoing: full audio hands to its stems over [from, when].
-        gain: {
-          cancel: stems.out.at,
-          steps: [
-            { t: stems.out.at, v: 1 },
-            { t: when, v: 0, ramp: true },
-          ],
-        },
-        stopAt: end + 0.1,
-      }
-    : {
-        gain: {
-          cancel: when,
-          steps: [
-            { t: swap, v: 1 },
-            { t: end, v: 0, ramp: true },
-          ],
-        },
-        bass: {
-          steps: [
-            { t: swap, v: 0 },
-            { t: swap + beat, v: BASS_CUT_DB, ramp: true },
-          ],
-        },
-        stopAt: end + 0.1,
-      };
-  if (stems) h.stems = stems;
-  // Not with stems: the outgoing stems play straight on and would part from a looping song.
-  if (i.loop && !stems && i.outPos != null && i.plan.in >= 8 && h.outgoing)
+  if (stems) {
+    h.outgoing = {
+      // Outgoing: full audio hands to its stems over [from, when].
+      gain: {
+        cancel: stems.out.at,
+        steps: [
+          { t: stems.out.at, v: 1 },
+          { t: when, v: 0, ramp: true },
+        ],
+      },
+      stopAt: end + 0.1,
+    };
+    h.stems = stems;
+    return h;
+  }
+  const lead = style === "filter" ? FILTER_BEATS * beat : 0;
+  h.outgoing = {
+    // Out at the switch; with `plan.out` beats it fades over them instead (a longer blend).
+    gain:
+      outS > 0
+        ? {
+            cancel: when - lead,
+            steps: [
+              { t: swap, v: 1 },
+              { t: end, v: 0, ramp: true },
+            ],
+          }
+        : {
+            cancel: when - lead,
+            steps: [
+              { t: cutAt, v: 1 },
+              { t: swap, v: 0, ramp: true },
+            ],
+          },
+    stopAt: end + 0.1,
+  };
+  if (outS > 0)
+    h.outgoing.bass = {
+      steps: [
+        { t: swap, v: 0 },
+        { t: swap + beat, v: BASS_CUT_DB, ramp: true },
+      ],
+    };
+  if (style === "filter")
+    // The old song thins out from the bottom over the bars before the switch.
+    h.outgoing.highpass = {
+      steps: [
+        { t: swap - lead, v: 20 },
+        { t: cutAt, v: 1200, exp: true },
+      ],
+    };
+  if (style === "echo")
+    // Its last beat goes into a beat-long echo that rings out under the new song.
+    h.outgoing.echo = {
+      delayS: beat,
+      feedback: ECHO_FEEDBACK,
+      send: {
+        steps: [
+          { t: swap - beat, v: 0 },
+          { t: swap - beat + 0.01, v: 1, ramp: true },
+        ],
+      },
+      until: swap + ECHO_TAIL_BEATS * beat,
+    };
+  if (style === "blend" && i.loop && i.outPos != null && i.plan.in >= 8)
     h.outgoing.loop = planLoop(i.loop, i.outPos, i.outRate ?? 1, when, swap, beat);
   return h;
 }

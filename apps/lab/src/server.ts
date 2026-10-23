@@ -34,11 +34,12 @@ async function transition(q: URLSearchParams) {
   const b = find(songs, q.get("b") ?? "");
   const at = Number(q.get("at") ?? 0);
   const r = await renderHandOver(a, b, {
-    plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 1) },
+    plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 0) },
     mode: q.get("mode") === "analysed" ? "analysed" : "choose",
+    style: (q.get("style") ?? "auto") as "auto" | "blend" | "filter" | "cut" | "echo",
     loop:
       Number(q.get("loop") ?? 8) > 0
-        ? { beats: Number(q.get("loop") ?? 8), roll: q.get("roll") !== "0" }
+        ? { beats: Number(q.get("loop") ?? 8), roll: q.get("roll") === "1" }
         : null,
     from: at + 5,
     startAt: at + 0.3,

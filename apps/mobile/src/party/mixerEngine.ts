@@ -29,8 +29,8 @@ import type { Engine, EngineStatus, TrackChange } from "./engine";
 
 /** How far ahead of the mix point the next song must be decoded. */
 const PRELOAD_AHEAD_S = 90;
-/** The outgoing loop of a planned mix (planHandOver): two bars, rolling into the swap. */
-const OUT_LOOP = { beats: 8, roll: true };
+/** The outgoing loop of a planned mix (planHandOver): two bars. */
+const OUT_LOOP = { beats: 8, roll: false };
 
 /** A full song, or its 30-second store preview while the full audio is pulled. */
 type Kind = "full" | "preview";
@@ -50,6 +50,9 @@ type Deck = {
   source: AudioBufferSourceNode;
   /** Low shelf: the bass swap is what makes two beat-matched songs sound like one. */
   filter: BiquadFilterNode;
+  /** High- and low-pass, open until a filter-style switch sweeps them. */
+  highpass: BiquadFilterNode;
+  lowpass: BiquadFilterNode;
   gain: GainNode;
   /** Context time at which `offset` of the buffer started playing. */
   startedAt: number;
@@ -329,9 +332,17 @@ export class MixerEngine implements Engine {
     filter.type = "lowshelf";
     filter.frequency.value = BASS_HZ;
     filter.gain.value = 0;
+    const highpass = this.ctx.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = 20;
+    const lowpass = this.ctx.createBiquadFilter();
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 20000;
     const gain = this.ctx.createGain();
     source.connect(filter);
-    filter.connect(gain);
+    filter.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(gain);
     gain.connect(this.master);
     return {
       song,
@@ -339,6 +350,8 @@ export class MixerEngine implements Engine {
       buffer,
       source,
       filter,
+      highpass,
+      lowpass,
       gain,
       startedAt: 0,
       offset: 0,
@@ -396,7 +409,7 @@ export class MixerEngine implements Engine {
       if (this.current === deck || this.nextDeck === deck) return;
       if (deck.endedId) this.endedDecks.delete(deck.endedId);
       releaseSource(deck.source);
-      for (const n of [deck.filter, deck.gain]) {
+      for (const n of [deck.filter, deck.highpass, deck.lowpass, deck.gain]) {
         try {
           n.disconnect();
         } catch {}
@@ -609,6 +622,7 @@ export class MixerEngine implements Engine {
     const inBeat = songBeat(deck.song, "in");
     if (cur?.kind === "full" && deck.kind === "full" && curBeat && inBeat)
       rate = matchRate(curBeat, this.rateAt(cur, when), inBeat);
+    const sameTempo = curBeat != null && inBeat != null && Math.abs(curBeat - inBeat) < 1e-4;
     const offset = deck.kind === "full" ? (deck.song.mixInS ?? 0) : 0;
     const h = planHandOver({
       when,
@@ -618,7 +632,10 @@ export class MixerEngine implements Engine {
       inOffset: offset,
       master: cur ? this.master.gain.value : null,
       stems: reason === "complete" && cur ? this.stemInput(cur, deck) : null,
-      // A planned mix loops the outgoing song from the mix point and rolls into the swap.
+      // Tempos too far apart to match: echo the old song out and drop the new one on the one.
+      style:
+        cur?.kind === "full" && deck.kind === "full" && rate === 1 && !sameTempo ? "echo" : "blend",
+      // A planned mix loops the outgoing song from the mix point.
       loop: reason === "complete" && cur?.kind === "full" ? OUT_LOOP : null,
       outPos: cur ? this.positionAt(cur, when) : undefined,
       outRate: cur ? this.rateAt(cur, when) : undefined,
@@ -627,7 +644,8 @@ export class MixerEngine implements Engine {
     apply(this.master.gain, h.master);
     apply(deck.gain.gain, h.incoming.gain);
     apply(deck.filter.gain, h.incoming.bass);
-    this.startDeck(deck, when, offset, rate);
+    apply(deck.lowpass.frequency, h.incoming.lowpass);
+    this.startDeck(deck, when, offset, h.rate);
     if (h.incoming.easeBack) {
       apply(deck.source.playbackRate, h.incoming.easeBack.rate);
       deck.ramp = { at: h.incoming.easeBack.at, dur: h.incoming.easeBack.dur };
@@ -635,6 +653,8 @@ export class MixerEngine implements Engine {
     if (cur && h.outgoing) {
       apply(cur.gain.gain, h.outgoing.gain);
       apply(cur.filter.gain, h.outgoing.bass);
+      apply(cur.highpass.frequency, h.outgoing.highpass);
+      if (h.outgoing.echo) this.echoOut(cur, h.outgoing.echo);
       if (h.outgoing.loop) this.playLoop(cur, h.outgoing.loop);
       try {
         cur.source.stop(h.outgoing.stopAt);
@@ -649,6 +669,36 @@ export class MixerEngine implements Engine {
     // Decode the following song once the outgoing deck has stopped, never in the middle of a mix.
     this.mixingUntil = h.end;
     if (after) void this.prepareNext(after);
+  }
+
+  /** Feed the outgoing deck into a feedback delay that rings out under the new song. */
+  private echoOut(deck: Deck, echo: NonNullable<NonNullable<HandOver["outgoing"]>["echo"]>) {
+    const send = this.ctx.createGain();
+    send.gain.value = 0;
+    const delay = this.ctx.createDelay(2);
+    delay.delayTime.value = echo.delayS;
+    const feedback = this.ctx.createGain();
+    feedback.gain.value = echo.feedback;
+    const thin = this.ctx.createBiquadFilter();
+    thin.type = "highpass";
+    thin.frequency.value = 300;
+    deck.gain.connect(send);
+    send.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(thin);
+    thin.connect(this.master);
+    apply(send.gain, echo.send);
+    this.later(
+      () => {
+        for (const n of [send, delay, feedback, thin]) {
+          try {
+            n.disconnect();
+          } catch {}
+        }
+      },
+      echo.until - this.ctx.currentTime + 0.5,
+    );
   }
 
   /**

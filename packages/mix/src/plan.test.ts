@@ -18,7 +18,8 @@ test("classic hand-over: 16 beats in, bass swap, 8 out", () => {
   close(h.swap, 18);
   close(h.end, 22);
   assert.equal(h.stems, undefined);
-  close(valueAt(h.incoming.gain, 14), 0.5);
+  // Up to full just before the switch (SWITCH_S), so half way is a hair over 0.5.
+  assert.ok(Math.abs(valueAt(h.incoming.gain, 14) - 0.5) < 0.005);
   close(valueAt(h.outgoing?.gain ?? { steps: [] }, 20, 1), 0.5);
   // The outgoing song holds full level until the incoming one is up (no master dip).
   close(valueAt(h.master ?? { steps: [] }, 15, 1), 1);

@@ -3,14 +3,15 @@
  *
  *   pnpm mix fetch [--limit 60]          pulled songs + analysis from the api, audio cached locally
  *   pnpm mix list [words]              cached songs that can be mixed
- *   pnpm mix render <A> <B> [--plan 16/1] [--from s] [--analysed] [--pre 16] [--post 16]
+ *   pnpm mix render <A> <B> [--plan 16/0] [--from s] [--analysed] [--pre 16] [--post 16]
  *                                      one hand-over to apps/lab/out/<A>__<B>.wav, plus its score.
  *                                      By default the DJ is asked for B at --from (A's time, default
  *                                      30 s before its mix-out) and waits for the best matching
  *                                      points; --analysed mixes at the server's points instead.
  *                                      --loop 8 (default; 0 for none) loops the outgoing song from
- *                                      the mix point, rolling 2/1/half beats into the swap
- *                                      (--no-roll to skip the roll).
+ *                                      the mix point (--roll: 2/1/half beats into the swap).
+ *                                      --style auto|blend|filter|cut|echo: how to switch (auto
+ *                                      picks from tempo, key and level, chooseStyle).
  *   pnpm mix bench [--n 20]            score many tempo-matchable pairs, write out/bench.md
  *   pnpm mix lab [--port 4400]         the same in a browser: pick pairs, change the plan, listen
  *
@@ -29,15 +30,15 @@ const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
     limit: { type: "string", default: "60" },
-    plan: { type: "string", default: "16/1" },
+    plan: { type: "string", default: "16/0" },
     pre: { type: "string", default: "16" },
     post: { type: "string", default: "16" },
     n: { type: "string", default: "20" },
     json: { type: "boolean", default: false },
     analysed: { type: "boolean", default: false },
     loop: { type: "string", default: "8" },
-    roll: { type: "boolean", default: true },
-    "no-roll": { type: "boolean", default: false },
+    style: { type: "string", default: "auto" },
+    roll: { type: "boolean", default: false },
     from: { type: "string" },
     port: { type: "string", default: "4400" },
   },
@@ -47,7 +48,8 @@ const slug = (s: LabSong) => s.songId.replace(/[^A-Za-z0-9_-]/g, "_");
 
 function planOf(text: string) {
   const [i, o] = text.split("/").map(Number);
-  if (!i || !o) throw new Error(`--plan is beats in/out, e.g. 16/1 (got ${text})`);
+  if (!i || o == null || Number.isNaN(o))
+    throw new Error(`--plan is beats in/out, e.g. 16/0 (got ${text})`);
   return { in: i, out: o };
 }
 
@@ -55,6 +57,7 @@ function show(s: Score) {
   const ms = (v: number | null) => (v == null ? "-" : `${v > 0 ? "+" : ""}${v} ms`);
   const flam = s.lagMs == null ? "" : Math.abs(s.lagMs) <= 20 ? "  tight" : "  flams (over 20 ms)";
   console.log(`${s.a}\n  → ${s.b}`);
+  console.log(`  style   ${s.style}`);
   console.log(
     `  tempo   ${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`,
   );
@@ -108,7 +111,8 @@ async function main() {
     mode: values.analysed ? ("analysed" as const) : ("choose" as const),
     from: values.from == null ? undefined : Number(values.from),
     // --loop 0 for none; --no-roll keeps the loop but skips the roll into the swap.
-    loop: Number(values.loop) > 0 ? { beats: Number(values.loop), roll: !values["no-roll"] } : null,
+    loop: Number(values.loop) > 0 ? { beats: Number(values.loop), roll: values.roll } : null,
+    style: values.style as "auto" | "blend" | "filter" | "cut" | "echo",
   };
   if (cmd === "render") {
     const [qa, qb] = args;
@@ -157,21 +161,30 @@ async function main() {
     const holes = dips.filter((d) => d >= 6).length;
     const clips = rows.filter((r) => r.peakDb > 0).length;
     const waits = rows.map((r) => r.points.waitS).sort((x, y) => x - y);
+    const styles = Object.entries(
+      rows.reduce<Record<string, number>>(
+        (m, r) => ({ ...m, [r.style]: (m[r.style] ?? 0) + 1 }),
+        {},
+      ),
+    )
+      .map(([k, v]) => `${k} ${v}`)
+      .join(", ");
     const lines = [
       `# Mix bench (${opts.mode === "choose" ? "chosen points" : "analysed points"}): ${rows.length} tempo-matchable pairs`,
       "",
       `Beats within 20 ms: ${tight} of ${lags.length}. Median |lag| ${sorted[sorted.length >> 1] ?? "-"} ms.`,
       `Level drops of 6 dB or more: ${holes}. Clipping: ${clips}. Median wait ${waits[waits.length >> 1] ?? "-"} s.`,
+      `Styles: ${styles}.`,
       "",
-      "| A | B | points | BPM | rate | keys | lag ms | drift ms | level before / low |",
-      "|---|---|---|---|---|---|---|---|---|",
+      "| A | B | style | points | BPM | rate | keys | lag ms | drift ms | level before / low |",
+      "|---|---|---|---|---|---|---|---|---|---|",
       ...rows.map(
         (r) =>
-          `| ${r.a} | ${r.b} | ${r.points.outS}s → ${r.points.inS}s | ${r.bpm} | ${r.rate} | ${r.keys} | ${r.lagMs} | ${r.driftMs} | ${r.loudness.before} / ${r.loudness.low} dB |`,
+          `| ${r.a} | ${r.b} | ${r.style} | ${r.points.outS}s → ${r.points.inS}s | ${r.bpm} | ${r.rate} | ${r.keys} | ${r.lagMs} | ${r.driftMs} | ${r.loudness.before} / ${r.loudness.low} dB |`,
       ),
     ];
     await writeFile(join(OUT, "bench.md"), `${lines.join("\n")}\n`);
-    console.log(lines.slice(0, 4).join("\n"));
+    console.log(lines.slice(0, 5).join("\n"));
     console.log(`  ${join(OUT, "bench.md")}`);
     return;
   }

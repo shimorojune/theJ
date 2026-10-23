@@ -7,6 +7,7 @@ import {
   camelot,
   camelotLabel,
   chooseMixPoints,
+  chooseStyle,
   type Features,
   fitToOnsets,
   type HandOver,
@@ -20,6 +21,8 @@ import {
   onGrid,
   type Plan,
   planHandOver,
+  type Schedule,
+  type Style,
   songBeat,
   songTrim,
   valueAt,
@@ -97,8 +100,10 @@ export type RenderOptions = {
   post?: number;
   /** Bring both songs to the same typical level (songTrim). Default on. */
   trim?: boolean;
-  /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats with a roll. */
+  /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats, no roll. */
   loop?: { beats: number; roll?: boolean } | null;
+  /** How to switch; "auto" (default) lets chooseStyle pick from the pair. */
+  style?: Style | "auto";
 };
 
 export type Score = {
@@ -111,6 +116,8 @@ export type Score = {
   keySteps: number | null;
   /** Where the mix happens: outgoing and incoming song times (s), and the wait from `from`. */
   points: { mode: string; outS: number; inS: number; waitS: number };
+  /** How it switched (chooseStyle, or as asked). */
+  style: Style;
   /** Each song's level over the overlap and its trim (dB). */
   levels: { out: number | null; in: number | null; outTrim: number; inTrim: number };
   /** Median lag of B's beats behind A's over the overlap (ms), drift first bar to last, per bar. */
@@ -230,7 +237,7 @@ export async function renderHandOver(
   const inTrim = trim ? fb.trimDb : 0;
   const mode = opts.mode ?? "choose";
   const from = opts.from ?? Math.max(0, (a.mixOutS as number) - 30);
-  const loop = opts.loop === undefined ? { beats: 8, roll: true } : opts.loop;
+  const loop = opts.loop === undefined ? { beats: 8, roll: false } : opts.loop;
   const chosen =
     mode === "choose"
       ? chooseMixPoints(fa, fb, {
@@ -260,18 +267,30 @@ export async function renderHandOver(
   const anchor = outS - startAt;
   const now = Math.max(0, anchor - beat - 0.4);
   const when = onGrid(anchor, beat * 4, now + beat + 0.05);
-  const rate = inBeat ? matchRate(beat, 1, inBeat) : 1;
+  const matchedRate = inBeat ? matchRate(beat, 1, inBeat) : 1;
+  const ka = camelot(a.key, a.scale);
+  const kb = camelot(b.key, b.scale);
+  const style =
+    opts.style && opts.style !== "auto"
+      ? opts.style
+      : chooseStyle({
+          matched: matchedRate !== 1 || (inBeat != null && Math.abs(inBeat - beat) < 1e-4),
+          keySteps: ka && kb ? keySteps(ka, kb) : null,
+          levelJumpDb: chosen ? chosen.inAfterLoud - chosen.outLoud : 0,
+        });
   const h = planHandOver({
     when,
     plan,
     beat,
-    rate,
+    rate: matchedRate,
     inOffset,
     master: 1,
+    style,
     loop,
     outPos: startAt + when,
     outRate: 1,
   });
+  const rate = h.rate;
 
   const total = h.end + (opts.post ?? 16);
   const frames = Math.ceil(total * SR);
@@ -316,20 +335,57 @@ export async function renderHandOver(
     // The song's level trim, ahead of the planned gains.
     const level = ctx.createGain();
     level.gain.value = 10 ** (trimDb / 20);
+    // Open until a filter-style switch sweeps them.
+    const highpass = ctx.createBiquadFilter();
+    highpass.type = "highpass";
+    highpass.frequency.value = 20;
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = "lowpass";
+    lowpass.frequency.value = 20000;
     const gain = ctx.createGain();
     source.connect(filter);
-    filter.connect(level);
+    filter.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(level);
     level.connect(gain);
     gain.connect(master);
-    return { source, filter, gain };
+    return { source, filter, highpass, lowpass, gain };
   };
   const A = deck(deckA, outTrim);
   const B = deck(deckB, inTrim);
-  apply(master.gain, h.master);
-  apply(A.gain.gain, h.outgoing?.gain);
-  apply(A.filter.gain, h.outgoing?.bass);
-  apply(B.gain.gain, h.incoming.gain);
-  apply(B.filter.gain, h.incoming.bass);
+  // Steps before the render starts (a filter sweep longer than the lead-in) start at 0.
+  const at0 = (s: Schedule | undefined): Schedule | undefined =>
+    s && {
+      cancel: s.cancel == null ? undefined : Math.max(0, s.cancel),
+      steps: s.steps.map((st) => ({ ...st, t: Math.max(0, st.t) })),
+    };
+  apply(master.gain, at0(h.master));
+  apply(A.gain.gain, at0(h.outgoing?.gain));
+  apply(A.filter.gain, at0(h.outgoing?.bass));
+  apply(A.highpass.frequency, at0(h.outgoing?.highpass));
+  apply(B.gain.gain, at0(h.incoming.gain));
+  apply(B.filter.gain, at0(h.incoming.bass));
+  apply(B.lowpass.frequency, at0(h.incoming.lowpass));
+  const echo = h.outgoing?.echo;
+  if (echo) {
+    // The outgoing deck into a feedback delay, thinned so the echo sits behind the new song.
+    const send = ctx.createGain();
+    send.gain.value = 0;
+    const delay = ctx.createDelay(2);
+    delay.delayTime.value = echo.delayS;
+    const feedback = ctx.createGain();
+    feedback.gain.value = echo.feedback;
+    const thin = ctx.createBiquadFilter();
+    thin.type = "highpass";
+    thin.frequency.value = 300;
+    A.gain.connect(send);
+    send.connect(delay);
+    delay.connect(feedback);
+    feedback.connect(delay);
+    delay.connect(thin);
+    thin.connect(master);
+    apply(send.gain, at0(echo.send));
+  }
   A.source.start(0);
   A.source.stop(h.outgoing?.stopAt ?? total);
   B.source.start(0);
@@ -352,8 +408,6 @@ export async function renderHandOver(
   const envA = onsetEnvelope(deckA, SR);
   const envB = onsetEnvelope(deckB, SR);
   const bars = barLags(envA, envB, h.when, h.swap + h.outS, beat);
-  const ka = camelot(a.key, a.scale);
-  const kb = camelot(b.key, b.scale);
   const loud = loudness(mix, SR, Math.max(0, h.when - 4), Math.min(total, h.end + 4));
   const before = loud.slice(0, Math.min(4, Math.floor(h.when)));
   const during = loud.slice(before.length);
@@ -377,6 +431,7 @@ export async function renderHandOver(
       rate: Math.round(rate * 10000) / 10000,
       keys: `${camelotLabel(ka)} → ${camelotLabel(kb)}`,
       keySteps: ka && kb ? keySteps(ka, kb) : null,
+      style: h.style,
       points: {
         mode: chosen ? "chosen" : "analysed",
         outS: r1(startAt + when),

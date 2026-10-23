@@ -61,9 +61,10 @@
       <label>Song<input class="song" id="b" list="songs" placeholder="type a title" /></label>
       <button type="button" id="random">Random matchable song</button>
       <label>Beats in<input class="num" id="in" type="number" value="16" min="1" /></label>
-      <label>Beats out<input class="num" id="out" type="number" value="1" min="0.25" step="0.25" /></label>
+      <label>Beats out<input class="num" id="out" type="number" value="0" min="0" step="0.25" /></label>
+      <label>Switch<select id="style"><option value="auto">picked for the pair</option><option value="blend">blend (bass swap)</option><option value="filter">filter, then switch</option><option value="cut">cut on the one</option><option value="echo">echo out</option></select></label>
       <label>Loop the outgoing song<select id="loop"><option value="8">2 bars</option><option value="4">1 bar</option><option value="16">4 bars</option><option value="0">no loop</option></select></label>
-      <label style="display:flex;gap:4px;align-items:center;flex-direction:row"><input type="checkbox" id="roll" checked /> roll into the swap</label>
+      <label style="display:flex;gap:4px;align-items:center;flex-direction:row"><input type="checkbox" id="roll" /> roll into the swap</label>
       <label>Mix points<select id="mode"><option value="choose">chosen by the DJ</option><option value="analysed">analysed (old)</option></select></label>
       <button type="button" class="primary big" id="go">Transition</button>
     </div>
@@ -201,7 +202,7 @@ async function transition() {
   const here = () => Math.max(deckPos(cur), cur.pos0);
   say("Listening for the best moment…");
   try {
-    const q = new URLSearchParams({ a: cur.song.id, b: next.id, at: String(here()), in: $("in").value, out: $("out").value, mode: $("mode").value, loop: $("loop").value, roll: $("roll").checked ? "1" : "0" });
+    const q = new URLSearchParams({ a: cur.song.id, b: next.id, at: String(here()), in: $("in").value, out: $("out").value, mode: $("mode").value, loop: $("loop").value, style: $("style").value, roll: $("roll").checked ? "1" : "0" });
     const [r, nextDeck] = await Promise.all([getJson(`/transition?${q}`), loadDeck(next)]);
     const buf = await ctx.decodeAudioData(await (await fetch(r.wav)).arrayBuffer());
     if (deck !== cur) throw new Error("Playback changed while choosing.");
@@ -248,6 +249,7 @@ function showScore(s) {
   const lv = s.levels;
   const rows = [
     ["From", s.a], ["Into", s.b],
+    ["Switch", s.style],
     ["Where", `out at ${mmss(s.points.outS)}, in at ${mmss(s.points.inS)} (${s.points.mode}), waited ${s.points.waitS} s`],
     ["Levels", lv.out == null ? `trims ${lv.outTrim} / ${lv.inTrim} dB` : `${lv.out} dB vs ${lv.in} dB over the overlap (trims ${lv.outTrim} / ${lv.inTrim} dB)`],
     ["Tempo", `${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`],
@@ -286,7 +288,7 @@ function tick() {
     $("nowTitle").textContent = t < tl.swap ? label(m.from) : label(m.to);
     const looping = m.r.loop && t >= tl.when && t < m.r.loop.releaseAt;
     $("nowPos").textContent = looping ? "looping" : t < tl.swap ? mmss(songT) : "";
-    if (t < tl.when) say(`Mixing in <b>${(tl.when - t).toFixed(1)} s</b>: out of ${m.from.title} at ${mmss(m.r.score.points.outS)}, into ${m.to.title} at ${mmss(m.r.score.points.inS)}.`);
+    if (t < tl.when) say(`${m.r.score.style} in <b>${(tl.when - t).toFixed(1)} s</b>: out of ${m.from.title} at ${mmss(m.r.score.points.outS)}, into ${m.to.title} at ${mmss(m.r.score.points.inS)}.`);
     else if (t < tl.end) say(`Mixing… ${t < tl.swap ? "bass swap in " + (tl.swap - t).toFixed(1) + " s" : "outgoing song fading"}`);
     else say(`Into ${m.to.title}. Pick what's next and press Transition again.`);
   } else if (mix && ctx.currentTime < mix.T) {
