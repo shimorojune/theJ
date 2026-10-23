@@ -357,7 +357,7 @@ export function pairCost(t: { stretchPct: number; keySteps: number | null; level
   if (t.stretchPct > 8) return 100 + t.stretchPct;
   return (
     Math.max(0, t.stretchPct - 1) * 3 +
-    (t.keySteps == null ? 0.25 : Math.max(0, t.keySteps - 1) * 0.25) +
+    (t.keySteps == null ? 0.5 : Math.max(0, t.keySteps - 1) * 0.75) +
     Math.abs(t.levelGapDb ?? 0) * 0.3
   );
 }

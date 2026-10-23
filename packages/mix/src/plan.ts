@@ -181,6 +181,11 @@ export type HandOverInput = {
    */
   detune?: number;
   /**
+   * The keys clash (3+ Camelot steps): as DJs do, only rhythm overlaps. With stems the incoming
+   * music waits for the switch; without them the blend is cut to a bar.
+   */
+  keyClash?: boolean;
+  /**
    * Loop the outgoing song from the mix point while the incoming one comes in, as a DJ sets up
    * a switch; with `roll` the loop halves over the last bar (2, 1, half a beat) into the swap.
    * Needs `outPos`, the outgoing song's position at `when` (s), and `outRate`, its rate there.
@@ -268,14 +273,15 @@ export function planHandOver(i: HandOverInput): HandOver {
   // Echo out drops the new song on the one at its own tempo: no stretching to match.
   const rate = style === "echo" ? 1 : i.rate;
   // Only a blend runs the new song under the old one; the others switch at `when`.
-  const inS = style === "blend" ? Math.min(14, i.plan.in * beat) : 0;
+  const inBeats = i.keyClash && !i.stems ? Math.min(4, i.plan.in) : i.plan.in;
+  const inS = style === "blend" ? Math.min(14, inBeats * beat) : 0;
   const outS = Math.min(8, i.plan.out * beat);
   const swap = when + inS;
   // With stems the outgoing drums and music trail off over the tail too, never at once.
   const stemOut = outS > 0 ? outS : TAIL_BEATS * beat;
   const stems =
     style === "blend" && i.master != null && i.stems
-      ? stemHandOver(i.stems, when, rate, i.inOffset, inS, stemOut, beat)
+      ? stemHandOver(i.stems, when, rate, i.inOffset, inS, stemOut, beat, Boolean(i.keyClash))
       : null;
   // Blend and cut leave with a tail: on the switch the outgoing lows go (no second kick under
   // the new downbeat), and the rest of it fades over TAIL_BEATS, so it never just stops.
@@ -510,6 +516,7 @@ function stemHandOver(
   inS: number,
   outS: number,
   beat: number,
+  keyClash = false,
 ): { out: StemVoices<OutStem>; in: StemVoices<InStem> } | null {
   const swap = when + inS;
   const end = swap + outS;
@@ -569,13 +576,24 @@ function stemHandOver(
           [end, 1],
           [end + beat, 0],
         ]),
-        other: env([
-          [when, 0],
-          [mid, 0],
-          [swap - beat, 1],
-          [end, 1],
-          [end + beat, 0],
-        ]),
+        // With clashing keys the music waits for the switch: only the drums overlap.
+        other: env(
+          keyClash
+            ? [
+                [when, 0],
+                [swap - 0.02, 0],
+                [swap, 1],
+                [end, 1],
+                [end + beat, 0],
+              ]
+            : [
+                [when, 0],
+                [mid, 0],
+                [swap - beat, 1],
+                [end, 1],
+                [end + beat, 0],
+              ],
+        ),
         rest: env([
           [when, 0],
           [swap, 0],

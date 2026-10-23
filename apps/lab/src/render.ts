@@ -347,7 +347,9 @@ export async function renderHandOver(
     };
   }
   // Into a key that sits with the outgoing one (a semitone or two), eased back after.
-  const shift = (opts.keyMatch ?? opts.stretcher === "signalsmith") ? keyShift(a, b) : 0;
+  // Off unless asked: shifting a song's key makes it sound wrong (vocals go "chipmunk"), even
+  // with a good stretcher. DJs pick songs in fitting keys and overlap only rhythm otherwise.
+  const shift = opts.keyMatch ? keyShift(a, b) : 0;
   const h = planHandOver({
     when,
     plan,
@@ -357,6 +359,7 @@ export async function renderHandOver(
     master: 1,
     style,
     detune: shift * 100,
+    keyClash: !shift && ka != null && kb != null && keySteps(ka, kb) >= 3,
     stems: stemInput,
     loop,
     outPos: startAt + when,

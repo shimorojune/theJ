@@ -1,8 +1,10 @@
 import {
   apply,
   BASS_HZ,
+  camelot,
   type HandOver,
   keyShift,
+  keySteps,
   LIMITER_INPUT,
   limiterCurve,
   MIX,
@@ -645,6 +647,7 @@ export class MixerEngine implements Engine {
         KEY_SHIFT && reason === "complete" && cur && !stems
           ? keyShift(cur.song, deck.song) * 100
           : 0,
+      keyClash: cur ? keysClash(cur.song, deck.song) : false,
       // A planned mix loops the outgoing song from the mix point.
       loop: reason === "complete" && cur?.kind === "full" ? OUT_LOOP : null,
       outPos: cur ? this.positionAt(cur, when) : undefined,
@@ -908,4 +911,11 @@ function releaseSource(source: AudioBufferSourceNode) {
   try {
     source.disconnect();
   } catch {}
+}
+
+/** Keys 3+ steps apart on the Camelot wheel: the mix overlaps only rhythm (planHandOver). */
+function keysClash(a: Song, b: Song): boolean {
+  const ka = camelot(a.key, a.scale);
+  const kb = camelot(b.key, b.scale);
+  return ka != null && kb != null && keySteps(ka, kb) >= 3;
 }
