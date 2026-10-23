@@ -5,9 +5,12 @@
 #   optional: CLERK_SECRET_KEY, FALLBACK_PROXY, DEV_AUTH_TOKEN (dev builds skip Clerk with x-dev-user + x-dev-token)
 # api is the only service with a public domain (via Dokploy Traefik on dokploy-network).
 # The compose keeps the probe's project name, so the Tailscale node identity (ts-state) carries over.
+# Images are built by GitHub Actions (.github/workflows/images.yml) and pulled from GHCR, so a
+# deploy never builds on the VPS. Pin a commit with THEJ_TAG=<sha> in the Dokploy env.
 services:
   api:
-    build: { context: ../.., dockerfile: apps/api/Dockerfile }
+    image: ghcr.io/shimorojune/thej-api:${THEJ_TAG:-latest}
+    pull_policy: always
     environment: &app-env
       DATABASE_URL: postgres://thej:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/thej
       REDIS_URL: redis://redis:6379
@@ -26,7 +29,8 @@ services:
     restart: unless-stopped
 
   migrate:
-    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
+    image: ghcr.io/shimorojune/thej-workers:${THEJ_TAG:-latest}
+    pull_policy: always
     command: ["node", "--import", "tsx", "../../packages/db/src/migrate.ts"]
     environment: *app-env
     depends_on:
@@ -35,7 +39,8 @@ services:
 
   # One-shot catalog crawl + embed + tag on every deploy; idempotent, re-crawls playlists after 7 days.
   catalog:
-    build: { context: ../.., dockerfile: apps/workers/Dockerfile }
+    image: ghcr.io/shimorojune/thej-workers:${THEJ_TAG:-latest}
+    pull_policy: always
     command: ["node", "--import", "tsx", "src/catalog/crawl.ts", "all"]
     environment:
       <<: *app-env
@@ -71,7 +76,8 @@ services:
     restart: unless-stopped
 
   streamer:
-    build: { context: ../.., dockerfile: apps/workers/streamer.Dockerfile }
+    image: ghcr.io/shimorojune/thej-streamer:${THEJ_TAG:-latest}
+    pull_policy: always
     network_mode: service:tailscale
     environment:
       <<: *app-env

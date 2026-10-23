@@ -18,6 +18,8 @@ COPY apps/workers/package.json apps/workers/
 COPY packages/shared/package.json packages/shared/
 COPY packages/db/package.json packages/db/
 COPY packages/core/package.json packages/core/
+# CPU only: skip onnxruntime-node's 300 MB CUDA download (it kept dropping mid-build).
+ENV ONNXRUNTIME_NODE_INSTALL=skip
 RUN pnpm install --frozen-lockfile --prod --filter @thej/workers...
 COPY packages packages
 COPY apps/workers apps/workers

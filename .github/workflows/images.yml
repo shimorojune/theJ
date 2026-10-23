@@ -1,0 +1,57 @@
+# Builds the server images on GitHub's runners and pushes them to GHCR; the Dokploy compose
+# (infra/dokploy/thej.compose.yml) pulls them, so deploys never compete with the VPS workers.
+# Deploy after this goes green. The nightly run refreshes yt-dlp in the streamer image.
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths: [apps/api/**, apps/workers/**, packages/**, package.json, pnpm-lock.yaml, .github/workflows/images.yml]
+  schedule:
+    - cron: "30 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            dockerfile: apps/api/Dockerfile
+          - name: workers
+            dockerfile: apps/workers/Dockerfile
+          - name: streamer
+            dockerfile: apps/workers/streamer.Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: day
+        run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          build-args: CACHEBUST=${{ steps.day.outputs.date }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ghcr.io/shimorojune/thej-${{ matrix.name }}:latest
+            ghcr.io/shimorojune/thej-${{ matrix.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max

@@ -8,6 +8,13 @@
 | `home/home-proxy.live.compose.yml`  | Umbrel Portainer | **live**: stack `deejay-home-proxy`                      |
 | `home/home-proxy.compose.yml`       | Umbrel Portainer | hardened version (own Tailscale node, no LAN port)       |
 
+## Deploying the VPS stack
+
+GitHub Actions (`.github/workflows/images.yml`) builds `thej-api`, `thej-workers` and `thej-streamer` on every push to
+main that touches server code, and pushes them to GHCR as `:latest` and `:<sha>`. The Dokploy compose only pulls, so a
+deploy no longer builds on the busy VPS. Auto-deploy on push is off: wait for the images run to go green, then deploy
+the Dokploy compose. Set `THEJ_TAG=<sha>` in the Dokploy env to pin or roll back.
+
 No secret values live here. They come from Dokploy / Portainer environment variables.
 
 ## Egress path
