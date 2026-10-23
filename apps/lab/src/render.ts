@@ -501,6 +501,19 @@ function limitedShare(x: Float32Array[]): number {
   return n ? (100 * over) / n : 0;
 }
 
+/** A copy of `x` fading to silence over its last `s` seconds, so a render doesn't end mid-song. */
+export function fadeOut(x: Float32Array[], s: number, sampleRate = SR): Float32Array[] {
+  return x.map((c) => {
+    const y = new Float32Array(c);
+    const n = Math.min(y.length, Math.round(s * sampleRate));
+    for (let i = 0; i < n; i++) {
+      const k = y.length - n + i;
+      y[k] = (y[k] as number) * (1 - i / n) ** 2;
+    }
+    return y;
+  });
+}
+
 export async function writeWav(path: string, x: Float32Array[], sampleRate = SR) {
   await writeFile(path, wavBytes(x, sampleRate));
 }

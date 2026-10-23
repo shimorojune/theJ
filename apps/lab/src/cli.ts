@@ -23,7 +23,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { camelot, keySteps, MAX_TEMPO_STRETCH, matchRate, songBeat } from "@thej/mix";
 import { fetchSongs, find, type LabSong, library, OUT } from "./data";
-import { renderHandOver, type Score, writeWav } from "./render";
+import { fadeOut, renderHandOver, type Score, writeWav } from "./render";
 import { serve } from "./server";
 
 const { positionals, values } = parseArgs({
@@ -32,7 +32,7 @@ const { positionals, values } = parseArgs({
     limit: { type: "string", default: "60" },
     plan: { type: "string", default: "16/0" },
     pre: { type: "string", default: "16" },
-    post: { type: "string", default: "16" },
+    post: { type: "string", default: "24" },
     n: { type: "string", default: "20" },
     json: { type: "boolean", default: false },
     analysed: { type: "boolean", default: false },
@@ -121,7 +121,7 @@ async function main() {
     const b = find(songs, qb);
     const r = await renderHandOver(a, b, opts);
     const path = join(OUT, `${slug(a)}__${slug(b)}.wav`);
-    await writeWav(path, r.mix);
+    await writeWav(path, fadeOut(r.mix, 3));
     if (values.json) console.log(JSON.stringify(r.score));
     else show(r.score);
     console.log(`  wav     ${path}`);

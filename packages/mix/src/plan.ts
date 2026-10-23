@@ -51,7 +51,7 @@ export const SWITCH_S = 0.03;
 export const FILTER_BEATS = 8;
 export const ECHO_FEEDBACK = 0.45;
 /** The outgoing song's tail after a blend or cut: its lows (below the high-pass) go at once, the rest fades over the beats. */
-export const TAIL_BEATS = 2;
+export const TAIL_BEATS = 4;
 export const TAIL_HIGHPASS_HZ = 250;
 export const ECHO_TAIL_BEATS = 8;
 
@@ -368,7 +368,8 @@ export function planHandOver(i: HandOverInput): HandOver {
               cancel: when - lead,
               steps: [
                 { t: swap, v: 1 },
-                { t: swap + tailS / 2, v: 0.35, ramp: true },
+                { t: swap + tailS / 4, v: 0.8, ramp: true },
+                { t: swap + tailS / 2, v: 0.45, ramp: true },
                 { t: end, v: 0, ramp: true },
               ],
             }
@@ -391,8 +392,9 @@ export function planHandOver(i: HandOverInput): HandOver {
   if (tailS > 0)
     h.outgoing.highpass = {
       steps: [
+        // The lows ease out over the first beat rather than dropping at once.
         { t: cutAt, v: 20 },
-        { t: swap, v: TAIL_HIGHPASS_HZ, exp: true },
+        { t: swap + beat, v: TAIL_HIGHPASS_HZ, exp: true },
       ],
     };
   if (style === "filter")
