@@ -26,11 +26,27 @@ export const stemsAvailable = () => existsSync(PYTHON);
 /** A song's stem envelopes (dB every 1/hz s), if `stems.py envelopes` has been run for it. */
 export async function stemEnvelopes(
   song: LabSong,
-): Promise<{ hz: number; vocals: number[] } | null> {
+): Promise<{ hz: number; vocals: number[]; music: number[] } | null> {
   const path = audioPath(song).replace(/\.m4a$/, ".stems.json");
-  return readFile(path, "utf8")
-    .then((t) => JSON.parse(t) as { hz: number; vocals: number[] })
+  const env = await readFile(path, "utf8")
+    .then(
+      (t) =>
+        JSON.parse(t) as Record<"drums" | "bass" | "other" | "vocals", number[]> & { hz: number },
+    )
     .catch(() => null);
+  if (!env) return null;
+  // Everything but the vocals, power-summed: what the singing has to stand out from.
+  const music = env.vocals.map(
+    (_, k) =>
+      10 *
+      Math.log10(
+        10 ** ((env.drums[k] ?? -120) / 10) +
+          10 ** ((env.bass[k] ?? -120) / 10) +
+          10 ** ((env.other[k] ?? -120) / 10) +
+          1e-12,
+      ),
+  );
+  return { hz: env.hz, vocals: env.vocals, music };
 }
 
 let worker: ChildProcessWithoutNullStreams | null = null;

@@ -80,19 +80,24 @@ export function beatLoudness(
 }
 
 /**
- * How much of each beat a stem is active, 0 to 1: the share of its envelope frames (dB, `hz`
- * per second) within 18 dB of the stem's loud passages (its 90th percentile).
+ * How much of each beat a stem is heard, 0 to 1: the share of its envelope frames (dB, `hz`
+ * per second) within 12 dB of its loud passages (90th percentile) and, given the rest of the
+ * mix's envelope `ref`, no more than 6 dB under it. A separated vocal always carries some
+ * bleed; this counts only singing that stands out, so the pauses between lines show.
  */
-export function beatActivity(env: number[], hz: number, beats: number[]): number[] {
+export function beatActivity(env: number[], hz: number, beats: number[], ref?: number[]): number[] {
   const sorted = env.filter((v) => v > -90).sort((x, y) => x - y);
   const loud = sorted[Math.floor(sorted.length * 0.9)] ?? -20;
-  const on = loud - 18;
+  const on = (k: number) => {
+    const v = env[k] ?? -120;
+    return v > loud - 12 && (!ref || v - (ref[k] ?? -120) > -6);
+  };
   return beats.map((t, i) => {
     const next = beats[i + 1] ?? t + 0.5;
     const a = Math.floor(t * hz);
     const b = Math.max(a + 1, Math.floor(next * hz));
     let n = 0;
-    for (let k = a; k < b; k++) if ((env[k] ?? -120) > on) n++;
+    for (let k = a; k < b; k++) if (on(k)) n++;
     return n / (b - a);
   });
 }
@@ -194,8 +199,11 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
   const bUsual = songLoudness(b.loud) + inTrim;
   const below = (usual: number, level: number) => Math.max(0, usual - level - 3) * 0.5;
 
+  // Knowing where the vocals are, any bar may do (the pause between two lines rarely falls on
+  // a phrase start); off-phrase points cost a little.
+  const vocalAware = Boolean(a.vocals && b.vocals);
   const phraseCandidates = (f: Features, anchor: number, ok: (i: number) => boolean) => {
-    for (const step of [PHRASE, 4, 1]) {
+    for (const step of vocalAware ? [4, 1] : [PHRASE, 4, 1]) {
       const out: number[] = [];
       for (let i = anchor % step; i < f.beats.length; i += step) if (ok(i)) out.push(i);
       if (out.length >= 2 || step === 1) return out;
@@ -246,9 +254,11 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
         let both = 0;
         for (let k = 0; k < o.plan.in; k++) both += va(k) * vb(k);
         const blend = o.plan.in ? both / o.plan.in : 0;
-        const aAtSwitch = (va(o.plan.in - 2) + va(o.plan.in - 1)) / 2;
-        const bMidLine = vb(o.plan.in - 1) * vb(o.plan.in);
-        vocalCost = blend * 6 + aAtSwitch * 3 + bMidLine * 2;
+        // The switch belongs in a pause: the outgoing song quiet over the two beats before it
+        // and the one after, the incoming one not already mid-line as it takes over.
+        const aAtSwitch = (va(o.plan.in - 2) + va(o.plan.in - 1) + va(o.plan.in)) / 3;
+        const bMidLine = (vb(o.plan.in - 1) + vb(o.plan.in)) / 2;
+        vocalCost = blend * 4 + aAtSwitch * 8 + bMidLine * 4;
       }
       const outS = ga.t;
       const inS = gb.t;
@@ -262,6 +272,7 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
         (ga.jitterMs + gb.jitterMs) / 5 +
         (matched ? 0 : 6) +
         vocalCost +
+        (vocalAware && ((i - aAnchor) % PHRASE !== 0 || (j - bAnchor) % PHRASE !== 0) ? 1 : 0) +
         0.04 * Math.max(0, outS - o.from) +
         0.02 * inS;
       if (!best || cost < best.cost)

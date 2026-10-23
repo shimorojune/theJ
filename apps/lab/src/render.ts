@@ -276,7 +276,7 @@ export async function renderHandOver(
   ] as const)
     if (!f.vocals) {
       const env = await stemEnvelopes(song);
-      if (env) f.vocals = beatActivity(env.vocals, env.hz, f.beats);
+      if (env) f.vocals = beatActivity(env.vocals, env.hz, f.beats, env.music);
     }
   // A stem hand-over replaces the loop (the stems would part from a looping song).
   const useStems = opts.stems ?? stemsAvailable();
