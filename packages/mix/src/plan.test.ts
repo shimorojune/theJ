@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { camelot, camelotLabel, keySteps } from "./camelot";
 import { chooseMixPoints, songTrim } from "./choose";
-import { MIX, MIX_HEADROOM, matchRate, onGrid, planHandOver, valueAt } from "./plan";
+import { MIX, matchRate, onGrid, planHandOver, valueAt } from "./plan";
 
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
@@ -13,7 +13,10 @@ test("classic hand-over: 16 beats in, bass swap, 8 out", () => {
   assert.equal(h.stems, undefined);
   close(valueAt(h.incoming.gain, 14), 0.5);
   close(valueAt(h.outgoing?.gain ?? { steps: [] }, 20, 1), 0.5);
-  close(valueAt(h.master ?? { steps: [] }, 15, 1), MIX_HEADROOM);
+  // The outgoing song holds full level until the incoming one is up (no master dip).
+  close(valueAt(h.master ?? { steps: [] }, 15, 1), 1);
+  close(valueAt(h.outgoing?.gain ?? { steps: [] }, 17.9, 1), 1);
+  close(valueAt(h.incoming.gain, 18), 1);
   assert.deepEqual(h.incoming.easeBack?.at, 22);
 });
 
@@ -110,4 +113,30 @@ test("trims bring songs to one level without pushing peaks past -1 dBFS", () => 
   assert.equal(songTrim(Array(100).fill(-8), -0.2), -4);
   assert.equal(songTrim(Array(100).fill(-20), -6), 4);
   assert.equal(songTrim(Array(100).fill(-20), -2), 1);
+});
+
+test("outgoing loop and roll land on beats and let go mid-loop", () => {
+  const h = planHandOver({
+    when: 10,
+    plan: MIX,
+    beat: 0.5,
+    rate: 1,
+    inOffset: 3,
+    master: 1,
+    loop: { beats: 8, roll: true },
+    outPos: 100,
+  });
+  const loop = h.outgoing?.loop;
+  assert.ok(loop);
+  assert.deepEqual(
+    loop.steps.map((s) => [s.at, s.startS, s.lengthS]),
+    [
+      [10, 100, 4],
+      // 12 beats into an 8-beat loop: its fifth beat.
+      [16, 102, 1],
+      [17, 102, 0.5],
+      [17.5, 102, 0.25],
+    ],
+  );
+  close(loop.releaseAt, 18.125);
 });

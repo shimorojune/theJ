@@ -36,6 +36,10 @@ async function transition(q: URLSearchParams) {
   const r = await renderHandOver(a, b, {
     plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 8) },
     mode: q.get("mode") === "analysed" ? "analysed" : "choose",
+    loop:
+      Number(q.get("loop") ?? 8) > 0
+        ? { beats: Number(q.get("loop") ?? 8), roll: q.get("roll") !== "0" }
+        : null,
     from: at + 5,
     startAt: at + 0.3,
     post: EASE_BACK_S + 3.5,
@@ -52,6 +56,7 @@ async function transition(q: URLSearchParams) {
     aLatencyS: r.aLatencyS,
     bHandOff: r.bHandOff,
     score: r.score,
+    loop: h.outgoing?.loop ?? null,
     curves: {
       aGain: curve(h.outgoing?.gain, total, 1),
       bGain: curve(h.incoming.gain, total, 0).map((v, i) => (i / 20 < h.when ? 0 : v)),

@@ -15,8 +15,26 @@ export const SKIP = { in: 2, out: 2 };
 /** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
 export const NOW = { in: 8, out: 4 };
 export const MAX_TEMPO_STRETCH = 0.08;
-/** Two mastered songs summed clip; the master dips this far (-3 dB) while both play. */
-export const MIX_HEADROOM = 0.71;
+/**
+ * Two mastered songs summed can pass full scale. Rather than turning the master down while the
+ * incoming song is still coming up (the floor goes quieter), the master runs through a soft
+ * limiter: untouched below KNEE, rounded off above it (limiterCurve, for a WaveShaperNode).
+ */
+export const LIMITER_KNEE = 0.7;
+export function limiterCurve(points = 4097): Float32Array<ArrayBuffer> {
+  const curve = new Float32Array(points);
+  const room = 1 - LIMITER_KNEE;
+  for (let i = 0; i < points; i++) {
+    // The shaper maps [-1, 1] onto the curve; inputs up to 2x full scale are rounded off.
+    const x = ((i / (points - 1)) * 2 - 1) * 2;
+    const a = Math.abs(x);
+    const y = a <= LIMITER_KNEE ? a : LIMITER_KNEE + room * Math.tanh((a - LIMITER_KNEE) / room);
+    curve[i] = Math.sign(x) * y;
+  }
+  return curve;
+}
+/** The shaper's input is scaled by this so inputs up to 2x full scale reach its curve. */
+export const LIMITER_INPUT = 0.5;
 /** The bass shelf each deck has: cut while a song is coming in, open once it owns the floor. */
 export const BASS_HZ = 180;
 export const BASS_CUT_DB = -18;
@@ -128,7 +146,22 @@ export type HandOverInput = {
   master: number | null;
   /** Both songs' stems for this mix; null or missing for the classic hand-over. */
   stems?: StemInput | null;
+  /**
+   * Loop the outgoing song from the mix point while the incoming one comes in, as a DJ sets up
+   * a switch; with `roll` the loop halves over the last bar (2, 1, half a beat) into the swap.
+   * Needs `outPos`, the outgoing song's position at `when` (s), and `outRate`, its rate there.
+   */
+  loop?: { beats: number; roll?: boolean } | null;
+  outPos?: number;
+  outRate?: number;
 };
+
+/**
+ * One loop region of the outgoing song: from context time `at` (when its playhead is at
+ * `startS`) it repeats [startS, startS + lengthS). Changes land on loop boundaries, so the
+ * engine may set each a quarter beat after `at` (setAt) without a jump.
+ */
+export type LoopStep = { at: number; setAt: number; startS: number; lengthS: number };
 
 export type StemVoices<K extends string> = {
   /** Context time the voices start, the stem offset they start at, and their rate. */
@@ -158,7 +191,13 @@ export type HandOver = {
     easeBack: { at: number; dur: number; rate: Schedule } | null;
   };
   /** Present when there is an outgoing song. */
-  outgoing?: { gain: Schedule; bass?: Schedule; stopAt: number };
+  outgoing?: {
+    gain: Schedule;
+    bass?: Schedule;
+    stopAt: number;
+    /** Loop regions in order, and when the loop lets go (the song plays on from there). */
+    loop?: { steps: LoopStep[]; releaseAt: number };
+  };
   stems?: { out: StemVoices<OutStem>; in: StemVoices<InStem> };
 };
 
@@ -230,14 +269,13 @@ export function planHandOver(i: HandOverInput): HandOver {
     };
   if (i.master == null) return h;
 
-  // Headroom while both decks play, eased so the dip itself is not heard.
+  // No dip: neither song gets quieter before the other has come up to its level (the limiter
+  // catches the peaks). A master left low by anything else is brought back over a beat.
   h.master = {
     cancel: when,
     steps: [
       { t: when, v: i.master },
-      { t: when + 2 * beat, v: MIX_HEADROOM, ramp: true },
-      { t: end, v: MIX_HEADROOM },
-      { t: end + 4 * beat, v: 1, ramp: true },
+      { t: when + beat, v: 1, ramp: true },
     ],
   };
   h.outgoing = stems
@@ -269,7 +307,44 @@ export function planHandOver(i: HandOverInput): HandOver {
         stopAt: end + 0.1,
       };
   if (stems) h.stems = stems;
+  // Not with stems: the outgoing stems play straight on and would part from a looping song.
+  if (i.loop && !stems && i.outPos != null && i.plan.in >= 8 && h.outgoing)
+    h.outgoing.loop = planLoop(i.loop, i.outPos, i.outRate ?? 1, when, swap, beat);
   return h;
+}
+
+/**
+ * The outgoing loop: `beats` long from the mix point; with `roll`, from the last bar before the
+ * swap it loops the beat it is on for 2 beats, then 1, then half, and lets go just after the
+ * swap, so the outgoing song plays on (fading) from there.
+ */
+function planLoop(
+  loop: { beats: number; roll?: boolean },
+  outPos: number,
+  outRate: number,
+  when: number,
+  swap: number,
+  beat: number,
+): { steps: LoopStep[]; releaseAt: number } {
+  const songBeat = beat * outRate;
+  const steps: LoopStep[] = [
+    { at: when, setAt: when - 0.3, startS: outPos, lengthS: loop.beats * songBeat },
+  ];
+  if (loop.roll) {
+    // Where the loop's playhead is 4 beats before the swap: a whole number of beats in.
+    const into = Math.round((swap - 4 * beat - when) / beat) % loop.beats;
+    const startS = outPos + into * songBeat;
+    for (const [before, len] of [
+      [4, 2],
+      [2, 1],
+      [1, 0.5],
+    ] as const) {
+      const at = swap - before * beat;
+      steps.push({ at, setAt: at + beat / 4, startS, lengthS: len * songBeat });
+    }
+  }
+  // A quarter beat in: mid-loop for every length, so letting go never catches a wrap.
+  return { steps, releaseAt: swap + beat / 4 };
 }
 
 /**
@@ -278,7 +353,8 @@ export function planHandOver(i: HandOverInput): HandOver {
  *   one beat before   the outgoing song crossfades from its full audio to its stems (they
  *                     sum to the same sound, so nothing audible changes)
  *   first half        the incoming drums ride in under it
- *   second half       the outgoing vocals fade out; the incoming music comes in
+ *   second half       the incoming music comes up; the outgoing vocals leave over the beat
+ *                     before the swap, once it is up
  *   swap              bass swap on the downbeat: outgoing bass out, incoming bass and vocals in
  *   out               the outgoing drums and music fade; then the incoming full song takes over
  *                     from its stems over a beat
@@ -317,11 +393,12 @@ function stemHandOver(
       rate: outRate,
       stopAt: end + 0.1,
       gain: {
+        // Out over the last beat before the swap, once the incoming music is up to level.
         vocals: env([
           [from, 0],
           [when, 1],
-          [mid, 1],
-          [when + inS * 0.875, 0],
+          [swap - beat, 1],
+          [swap, 0],
         ]),
         bass: env([
           [from, 0],
@@ -353,7 +430,7 @@ function stemHandOver(
         other: env([
           [when, 0],
           [mid, 0],
-          [swap, 1],
+          [swap - beat, 1],
           [end, 1],
           [end + beat, 0],
         ]),

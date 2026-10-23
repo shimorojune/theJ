@@ -11,6 +11,10 @@ import {
   fitToOnsets,
   type HandOver,
   keySteps,
+  LIMITER_INPUT,
+  LIMITER_KNEE,
+  type LoopStep,
+  limiterCurve,
   MIX,
   matchRate,
   onGrid,
@@ -93,6 +97,8 @@ export type RenderOptions = {
   post?: number;
   /** Bring both songs to the same typical level (songTrim). Default on. */
   trim?: boolean;
+  /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats with a roll. */
+  loop?: { beats: number; roll?: boolean } | null;
 };
 
 export type Score = {
@@ -117,6 +123,8 @@ export type Score = {
   peakDb: number;
   /** The louder deck's own peak over the same stretch: above 0 means the song itself is hot. */
   deckPeakDb: number;
+  /** Share of the overlap (%) the limiter was rounding peaks off. */
+  limitedPct: number;
   /** Loudness from the mix point to 4 s after it, against the 4 s before it (dB, 1 s steps). */
   loudness: { before: number; low: number; high: number };
   /** Render times (s from its start). */
@@ -141,6 +149,40 @@ export type Render = {
    */
   bHandOff: { renderT: number; songPos: number; match: number } | null;
 };
+
+/**
+ * The outgoing deck's audio as its buffer source reads it, from `startAt`, with the planned
+ * loops: hard jumps at each wrap, as a looping AudioBufferSourceNode makes them.
+ */
+function withLoops(
+  x: Float32Array[],
+  startAt: number,
+  frames: number,
+  loop: { steps: LoopStep[]; releaseAt: number } | undefined,
+): Float32Array[] {
+  const start = Math.round(startAt * SR);
+  if (!loop?.steps.length) return x.map((c) => c.subarray(start, start + frames));
+  const out = x.map(() => new Float32Array(frames));
+  const steps = loop.steps.map((s) => ({
+    at: Math.round(s.at * SR),
+    from: Math.round(s.startS * SR),
+    len: Math.max(1, Math.round(s.lengthS * SR)),
+  }));
+  const release = Math.round(loop.releaseAt * SR);
+  let k = 0;
+  let pos = start;
+  for (let f = 0; f < frames; f++) {
+    const next = steps[k + 1];
+    if (next && f >= next.at) k++;
+    const st = steps[k] as { at: number; from: number; len: number };
+    if (f < (steps[0] as { at: number }).at) pos = start + f;
+    else if (f < release) pos = st.from + ((f - st.at) % st.len);
+    else pos++;
+    for (let c = 0; c < x.length; c++)
+      (out[c] as Float32Array)[f] = ((x[c] as Float32Array)[pos] as number) ?? 0;
+  }
+  return out;
+}
 
 /** Where `seg` sits in `raw`, within `radius` frames of `guess` (normalised cross-correlation). */
 function locate(raw: Float32Array, seg: Float32Array, guess: number, radius: number) {
@@ -188,9 +230,17 @@ export async function renderHandOver(
   const inTrim = trim ? fb.trimDb : 0;
   const mode = opts.mode ?? "choose";
   const from = opts.from ?? Math.max(0, (a.mixOutS as number) - 30);
+  const loop = opts.loop === undefined ? { beats: 8, roll: true } : opts.loop;
   const chosen =
     mode === "choose"
-      ? chooseMixPoints(fa, fb, { from, maxWait: opts.maxWait, plan, outTrim, inTrim })
+      ? chooseMixPoints(fa, fb, {
+          from,
+          maxWait: opts.maxWait,
+          plan,
+          outTrim,
+          inTrim,
+          loopBeats: loop?.beats,
+        })
       : null;
   // Chosen points sit on the analysed beats; the grid there is then fitted to the audio, as the
   // server fits it at its own mix points.
@@ -211,11 +261,27 @@ export async function renderHandOver(
   const now = Math.max(0, anchor - beat - 0.4);
   const when = onGrid(anchor, beat * 4, now + beat + 0.05);
   const rate = inBeat ? matchRate(beat, 1, inBeat) : 1;
-  const h = planHandOver({ when, plan, beat, rate, inOffset, master: 1 });
+  const h = planHandOver({
+    when,
+    plan,
+    beat,
+    rate,
+    inOffset,
+    master: 1,
+    loop,
+    outPos: startAt + when,
+    outRate: 1,
+  });
 
   const total = h.end + (opts.post ?? 16);
   const frames = Math.ceil(total * SR);
-  const deckA = stretchDeck(xa, Math.round(startAt * SR), frames, SR, () => 1);
+  const deckA = stretchDeck(
+    withLoops(xa, startAt, frames, h.outgoing?.loop),
+    0,
+    frames,
+    SR,
+    () => 1,
+  );
   const whenF = Math.round(when * SR);
   const ease = h.incoming.easeBack;
   const deckBRaw = stretchDeck(xb, Math.round(inOffset * SR), frames - whenF, SR, (f) =>
@@ -229,7 +295,14 @@ export async function renderHandOver(
 
   const ctx = new OfflineAudioContext(2, frames, SR);
   const master = ctx.createGain();
-  master.connect(ctx.destination);
+  // The soft limiter the phone has on its master (planHandOver: no dip, peaks rounded off).
+  const toShaper = ctx.createGain();
+  toShaper.gain.value = LIMITER_INPUT;
+  const limiter = ctx.createWaveShaper();
+  limiter.curve = limiterCurve();
+  master.connect(toShaper);
+  toShaper.connect(limiter);
+  limiter.connect(ctx.destination);
   const deck = (x: Float32Array[], trimDb: number) => {
     const buf = ctx.createBuffer(2, frames, SR);
     for (let c = 0; c < 2; c++)
@@ -329,6 +402,7 @@ export async function renderHandOver(
       },
       peakDb: r1(peakDb(overlap(mix))),
       deckPeakDb: r1(Math.max(peakDb(overlap(deckA)), peakDb(overlap(deckB)))),
+      limitedPct: r1(limitedShare(overlap(mix))),
       loudness: {
         before: r1(before.reduce((s, v) => s + v, 0) / Math.max(1, before.length)),
         // Over two seconds, so one quiet beat doesn't read as a hole.
@@ -348,6 +422,17 @@ export async function renderHandOver(
       },
     },
   };
+}
+
+function limitedShare(x: Float32Array[]): number {
+  let over = 0;
+  let n = 0;
+  for (const ch of x)
+    for (const v of ch) {
+      n++;
+      if (Math.abs(v) > LIMITER_KNEE) over++;
+    }
+  return n ? (100 * over) / n : 0;
 }
 
 export async function writeWav(path: string, x: Float32Array[], sampleRate = SR) {

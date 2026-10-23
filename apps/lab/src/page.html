@@ -62,6 +62,8 @@
       <button type="button" id="random">Random matchable song</button>
       <label>Beats in<input class="num" id="in" type="number" value="16" min="1" /></label>
       <label>Beats out<input class="num" id="out" type="number" value="8" min="1" /></label>
+      <label>Loop the outgoing song<select id="loop"><option value="8">2 bars</option><option value="4">1 bar</option><option value="16">4 bars</option><option value="0">no loop</option></select></label>
+      <label style="display:flex;gap:4px;align-items:center;flex-direction:row"><input type="checkbox" id="roll" checked /> roll into the swap</label>
       <label>Mix points<select id="mode"><option value="choose">chosen by the DJ</option><option value="analysed">analysed (old)</option></select></label>
       <button type="button" class="primary big" id="go">Transition</button>
     </div>
@@ -199,7 +201,7 @@ async function transition() {
   const here = () => Math.max(deckPos(cur), cur.pos0);
   say("Listening for the best moment…");
   try {
-    const q = new URLSearchParams({ a: cur.song.id, b: next.id, at: String(here()), in: $("in").value, out: $("out").value, mode: $("mode").value });
+    const q = new URLSearchParams({ a: cur.song.id, b: next.id, at: String(here()), in: $("in").value, out: $("out").value, mode: $("mode").value, loop: $("loop").value, roll: $("roll").checked ? "1" : "0" });
     const [r, nextDeck] = await Promise.all([getJson(`/transition?${q}`), loadDeck(next)]);
     const buf = await ctx.decodeAudioData(await (await fetch(r.wav)).arrayBuffer());
     if (deck !== cur) throw new Error("Playback changed while choosing.");
@@ -252,7 +254,7 @@ function showScore(s) {
     ["Key", `${s.keys} ${s.keySteps == null ? "" : s.keySteps <= 1 ? '<span class="good">compatible</span>' : `<span class="bad">${s.keySteps} steps apart</span>`}`],
     ["Beats", `${ms(s.lagMs)} median, drift ${ms(s.driftMs)} <span class="${tight ? "good" : "bad"}">${s.lagMs == null ? "" : tight ? "tight" : "flams"}</span>`],
     ["Through it", `${s.loudness.before} dB before, ${s.loudness.low} to ${s.loudness.high} dB ${dip >= 6 ? `<span class="bad">drops ${dip.toFixed(0)} dB</span>` : ""}`],
-    ["Peak", `${s.peakDb} dBFS ${s.peakDb > 0 ? '<span class="bad">clips</span>' : ""}`],
+    ["Peak", `${s.peakDb} dBFS, limiter rounding peaks ${s.limitedPct}% of the time`],
   ];
   $("score").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
 }
@@ -282,7 +284,8 @@ function tick() {
     const tl = m.r.score.timeline;
     const songT = m.r.startAt + t - m.r.aLatencyS;
     $("nowTitle").textContent = t < tl.swap ? label(m.from) : label(m.to);
-    $("nowPos").textContent = t < tl.swap ? mmss(songT) : "";
+    const looping = m.r.loop && t >= tl.when && t < m.r.loop.releaseAt;
+    $("nowPos").textContent = looping ? "looping" : t < tl.swap ? mmss(songT) : "";
     if (t < tl.when) say(`Mixing in <b>${(tl.when - t).toFixed(1)} s</b>: out of ${m.from.title} at ${mmss(m.r.score.points.outS)}, into ${m.to.title} at ${mmss(m.r.score.points.inS)}.`);
     else if (t < tl.end) say(`Mixing… ${t < tl.swap ? "bass swap in " + (tl.swap - t).toFixed(1) + " s" : "outgoing song fading"}`);
     else say(`Into ${m.to.title}. Pick what's next and press Transition again.`);
@@ -345,6 +348,17 @@ function draw(t) {
   line(curves.bBass, css("--b"), cut, 0.4);
   line(curves.aGain, css("--a"), lvl);
   line(curves.bGain, css("--b"), lvl);
+  // The outgoing loop: one band per loop length, shorter ones (the roll) darker.
+  if (shown.loop) {
+    const steps = shown.loop.steps;
+    steps.forEach((st, i) => {
+      const end = steps[i + 1]?.at ?? shown.loop.releaseAt;
+      g.fillStyle = css("--a"); g.globalAlpha = 0.08 + 0.08 * i;
+      g.fillRect(x(st.at), top, x(end) - x(st.at), span);
+    });
+    g.globalAlpha = 1; g.fillStyle = css("--muted");
+    g.fillText(`loop ${steps.length > 1 ? "+ roll" : ""}`, x(steps[0].at) + 3, bottom - 4);
+  }
   const y0 = h - 16;
   g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(0, y0); g.lineTo(w, y0); g.stroke();
   score.bars.forEach((lag, i) => {

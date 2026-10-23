@@ -2,6 +2,8 @@ import {
   apply,
   BASS_HZ,
   type HandOver,
+  LIMITER_INPUT,
+  limiterCurve,
   MIX,
   matchRate,
   NOW,
@@ -27,6 +29,8 @@ import type { Engine, EngineStatus, TrackChange } from "./engine";
 
 /** How far ahead of the mix point the next song must be decoded. */
 const PRELOAD_AHEAD_S = 90;
+/** The outgoing loop of a planned mix (planHandOver): two bars, rolling into the swap. */
+const OUT_LOOP = { beats: 8, roll: true };
 
 /** A full song, or its 30-second store preview while the full audio is pulled. */
 type Kind = "full" | "preview";
@@ -105,7 +109,14 @@ export class MixerEngine implements Engine {
 
   constructor() {
     this.master = this.ctx.createGain();
-    this.master.connect(this.ctx.destination);
+    // Soft limiter on the master: mixes add the songs at full level rather than dipping.
+    const toShaper = this.ctx.createGain();
+    toShaper.gain.value = LIMITER_INPUT;
+    const limiter = this.ctx.createWaveShaper();
+    limiter.curve = limiterCurve();
+    this.master.connect(toShaper);
+    toShaper.connect(limiter);
+    limiter.connect(this.ctx.destination);
     this.silent = this.ctx.createGain();
     this.silent.gain.value = 0;
     this.silent.connect(this.ctx.destination);
@@ -607,6 +618,10 @@ export class MixerEngine implements Engine {
       inOffset: offset,
       master: cur ? this.master.gain.value : null,
       stems: reason === "complete" && cur ? this.stemInput(cur, deck) : null,
+      // A planned mix loops the outgoing song from the mix point and rolls into the swap.
+      loop: reason === "complete" && cur?.kind === "full" ? OUT_LOOP : null,
+      outPos: cur ? this.positionAt(cur, when) : undefined,
+      outRate: cur ? this.rateAt(cur, when) : undefined,
     });
     if (cur && h.stems) this.playStems(cur, deck, h.stems);
     apply(this.master.gain, h.master);
@@ -620,6 +635,7 @@ export class MixerEngine implements Engine {
     if (cur && h.outgoing) {
       apply(cur.gain.gain, h.outgoing.gain);
       apply(cur.filter.gain, h.outgoing.bass);
+      if (h.outgoing.loop) this.playLoop(cur, h.outgoing.loop);
       try {
         cur.source.stop(h.outgoing.stopAt);
       } catch {}
@@ -633,6 +649,23 @@ export class MixerEngine implements Engine {
     // Decode the following song once the outgoing deck has stopped, never in the middle of a mix.
     this.mixingUntil = h.end;
     if (after) void this.prepareNext(after);
+  }
+
+  /**
+   * Set the outgoing source's loop regions on the audio clock. Each lands a little after the
+   * boundary it starts on (setAt), so a late timer still finds the playhead inside the region.
+   */
+  private playLoop(deck: Deck, loop: NonNullable<NonNullable<HandOver["outgoing"]>["loop"]>) {
+    const now = this.ctx.currentTime;
+    for (const step of loop.steps)
+      this.later(() => {
+        deck.source.loopStart = step.startS;
+        deck.source.loopEnd = step.startS + step.lengthS;
+        deck.source.loop = true;
+      }, step.setAt - now);
+    this.later(() => {
+      deck.source.loop = false;
+    }, loop.releaseAt - now);
   }
 
   /** The decoded stems both songs have around this mix, or null for the classic hand-over. */

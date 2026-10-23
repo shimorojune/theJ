@@ -8,6 +8,9 @@
  *                                      By default the DJ is asked for B at --from (A's time, default
  *                                      30 s before its mix-out) and waits for the best matching
  *                                      points; --analysed mixes at the server's points instead.
+ *                                      --loop 8 (default; 0 for none) loops the outgoing song from
+ *                                      the mix point, rolling 2/1/half beats into the swap
+ *                                      (--no-roll to skip the roll).
  *   pnpm mix bench [--n 20]            score many tempo-matchable pairs, write out/bench.md
  *   pnpm mix lab [--port 4400]         the same in a browser: pick pairs, change the plan, listen
  *
@@ -32,6 +35,9 @@ const { positionals, values } = parseArgs({
     n: { type: "string", default: "20" },
     json: { type: "boolean", default: false },
     analysed: { type: "boolean", default: false },
+    loop: { type: "string", default: "8" },
+    roll: { type: "boolean", default: true },
+    "no-roll": { type: "boolean", default: false },
     from: { type: "string" },
     port: { type: "string", default: "4400" },
   },
@@ -71,7 +77,7 @@ function show(s: Score) {
     `  level   ${s.loudness.before} dB before, ${s.loudness.low} to ${s.loudness.high} dB through it${dip >= 6 ? `  drops ${dip.toFixed(0)} dB` : ""}`,
   );
   console.log(
-    `  peak    ${s.peakDb} dBFS while both play (louder deck alone ${s.deckPeakDb})${s.peakDb > 0 ? "  clips" : ""}`,
+    `  peak    ${s.peakDb} dBFS while both play, limiter rounding peaks ${s.limitedPct}% of the time`,
   );
   console.log(
     `  start   A ${s.startLatencyMs.a} ms, B ${s.startLatencyMs.b} ms late (stretcher warm-up)`,
@@ -101,6 +107,8 @@ async function main() {
     post: Number(values.post),
     mode: values.analysed ? ("analysed" as const) : ("choose" as const),
     from: values.from == null ? undefined : Number(values.from),
+    // --loop 0 for none; --no-roll keeps the loop but skips the roll into the swap.
+    loop: Number(values.loop) > 0 ? { beats: Number(values.loop), roll: !values["no-roll"] } : null,
   };
   if (cmd === "render") {
     const [qa, qb] = args;

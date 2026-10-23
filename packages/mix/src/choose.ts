@@ -26,6 +26,11 @@ export type ChooseOptions = {
   /** Level trims (dB) each song plays with (songTrim), so loudness is compared as heard. */
   outTrim?: number;
   inTrim?: number;
+  /**
+   * The outgoing song loops this many beats from the mix point (planHandOver's loop): only that
+   * stretch of it needs to be steady and as loud, and it needs no song left after it.
+   */
+  loopBeats?: number | null;
 };
 
 export type MixPoints = {
@@ -154,6 +159,7 @@ const nearest = (beats: number[], t: number) => {
  */
 export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): MixPoints | null {
   const span = o.plan.in + o.plan.out;
+  const outSpan = o.loopBeats ?? span;
   const maxWait = o.maxWait ?? 40;
   if (a.beats.length < span + 8 || b.beats.length < span + 24) return null;
   const outTrim = o.outTrim ?? 0;
@@ -173,11 +179,11 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
   const aAnchor = nearest(a.beats, a.mixOutS ?? a.duration - 8);
   const outs = phraseCandidates(a, aAnchor, (i) => {
     const t = a.beats[i] as number;
-    return t >= o.from && t <= o.from + maxWait && i + span + 2 < a.beats.length;
+    return t >= o.from && t <= o.from + maxWait && i + outSpan + 2 < a.beats.length;
   });
   // Past every candidate (the song is nearly over): the last point that still fits.
   if (!outs.length) {
-    const last = a.beats.length - span - 3;
+    const last = a.beats.length - outSpan - 3;
     if (last < 8) return null;
     outs.push(last);
   }
@@ -188,12 +194,14 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
     (j) => (b.beats[j] as number) <= b.duration * 0.6 && j + span + 16 < b.beats.length,
   );
 
-  const outGrid = new Map(outs.map((i) => [i, fitGrid(a.beats, Math.max(0, i - 8), i + span, i)]));
+  const outGrid = new Map(
+    outs.map((i) => [i, fitGrid(a.beats, Math.max(0, i - 8), i + outSpan, i)]),
+  );
   const inGrid = new Map(ins.map((j) => [j, fitGrid(b.beats, j, j + span + 8, j)]));
   let best: MixPoints | null = null;
   for (const i of outs) {
     const ga = outGrid.get(i) as ReturnType<typeof fitGrid>;
-    const la = mean(a.loud, i - 8, i + span) + outTrim;
+    const la = mean(a.loud, i - 8, i + outSpan) + outTrim;
     const lead = mean(a.loud, i - 24, i - 8) + outTrim;
     for (const j of ins) {
       const gb = inGrid.get(j) as ReturnType<typeof fitGrid>;
