@@ -59,7 +59,7 @@
     <h2>Up next</h2>
     <div class="row">
       <label>Song<input class="song" id="b" list="songs" placeholder="type a title" /></label>
-      <button type="button" id="random">Random matchable song</button>
+      <button type="button" id="random">Pick a close match</button>
       <label>Beats in<input class="num" id="in" type="number" value="16" min="1" /></label>
       <label>Beats out<input class="num" id="out" type="number" value="0" min="0" step="0.25" /></label>
       <label>Switch<select id="style"><option value="auto">picked for the pair</option><option value="blend">blend (bass swap)</option><option value="filter">filter, then switch</option><option value="cut">cut on the one</option><option value="echo">echo out</option></select></label>
@@ -69,6 +69,8 @@
       <button type="button" class="primary big" id="go">Transition</button>
     </div>
     <div class="status" id="status"></div>
+    <div class="muted" style="margin-top:10px">Best matches for what's playing (same tempo sounds best: no stretching)</div>
+    <ul id="matches" style="margin-top:4px"></ul>
     <datalist id="songs"></datalist>
   </section>
 
@@ -172,19 +174,37 @@ async function play() {
     const d = await loadDeck(song);
     deck = startDeck(song, d, Number($("start").value) || 0, ctx.currentTime + 0.05);
     say("");
-    if (!$("b").value) randomNext();
+    randomNext(!$("b").value);
   } catch (e) {
     say(`<span class="err">${e.message}</span>`);
   }
 }
 
-function randomNext() {
+let matches = [];
+/** Rank the cached songs against what is playing; fill Up next with one of the closest. */
+async function randomNext(fill = true) {
   const cur = deck?.song ?? byLabel($("a").value);
-  const pool = songs.filter((s) => s !== cur && (!cur || rate(cur, s) !== 1));
-  const pick = pool[Math.floor(Math.random() * pool.length)];
-  if (pick) {
-    $("b").value = label(pick);
-    fetch(`/prepare?song=${encodeURIComponent(pick.id)}`);
+  if (!cur) return;
+  try {
+    matches = await getJson(`/matches?song=${encodeURIComponent(cur.id)}`);
+  } catch {
+    matches = [];
+  }
+  $("matches").innerHTML = matches.map((m) => {
+    const s = songs.find((x) => x.id === m.id);
+    if (!s) return "";
+    const tempo = m.stretchPct <= 1 ? '<span class="good">same tempo</span>' : m.stretchPct <= 3 ? `${m.stretchPct.toFixed(1)}% stretch` : `<span class="bad">${m.stretchPct.toFixed(1)}% stretch</span>`;
+    const key = m.keySteps == null ? "" : m.keySteps <= 1 ? " · keys agree" : ` · keys ${m.keySteps} apart`;
+    const level = m.levelGapDb == null ? "" : ` · ${m.levelGapDb > 0 ? "+" : ""}${m.levelGapDb.toFixed(1)} dB`;
+    return `<li><button type="button" data-b="${s.id}">play next</button> ${label(s)} <span class="muted">${tempo}${key}${level}</span></li>`;
+  }).join("");
+  if (!fill) return;
+  const top = matches.slice(0, 3);
+  const pick = top[Math.floor(Math.random() * top.length)];
+  const s = pick && songs.find((x) => x.id === pick.id);
+  if (s) {
+    $("b").value = label(s);
+    fetch(`/prepare?song=${encodeURIComponent(s.id)}`);
   }
 }
 
@@ -395,6 +415,14 @@ async function ask() {
     $("picks").innerHTML = `<li class="err">${e.message}</li>`;
   }
 }
+$("matches").addEventListener("click", (e) => {
+  const id = e.target.dataset?.b;
+  const s = id && songs.find((x) => x.id === id);
+  if (s) {
+    $("b").value = label(s);
+    fetch(`/prepare?song=${encodeURIComponent(s.id)}`);
+  }
+});
 $("picks").addEventListener("click", (e) => {
   const id = e.target.dataset?.b;
   const s = id && songs.find((x) => x.id === id);
@@ -404,7 +432,7 @@ $("picks").addEventListener("click", (e) => {
 $("play").onclick = play;
 $("stop").onclick = () => { stopAll(); say(""); };
 $("go").onclick = transition;
-$("random").onclick = randomNext;
+$("random").onclick = () => randomNext();
 $("ask").onclick = ask;
 $("b").addEventListener("change", () => { const s = byLabel($("b").value); if (s) fetch(`/prepare?song=${encodeURIComponent(s.id)}`); });
 loadSongs().catch((e) => say(`<span class="err">${e.message}</span>`));

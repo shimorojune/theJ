@@ -304,3 +304,24 @@ export type PairTraits = {
 export function chooseStyle(t: PairTraits): Style {
   return t.matched ? "blend" : "echo";
 }
+
+/** How much the incoming song must be sped up or slowed (%) to match: half and double time count. */
+export function stretchPct(outBeat: number, inBeat: number): number {
+  const r = inBeat / outBeat;
+  return Math.min(...[r, r / 2, r * 2].map((c) => Math.abs(c - 1))) * 100;
+}
+
+/**
+ * How well a song follows another, lower is better. The best-sounding mixes need no stretch at
+ * all (the phone's stretcher warbles audibly past a percent or so; Rohit's favourite mix was two
+ * songs at the same 119 bpm), so tempo dominates: free within 1%, then steeply worse, out of the
+ * running past the 8% the mixer will stretch. Then keys apart on the Camelot wheel, then level.
+ */
+export function pairCost(t: { stretchPct: number; keySteps: number | null; levelGapDb?: number }) {
+  if (t.stretchPct > 8) return 100 + t.stretchPct;
+  return (
+    Math.max(0, t.stretchPct - 1) * 3 +
+    (t.keySteps == null ? 0.25 : Math.max(0, t.keySteps - 1) * 0.25) +
+    Math.abs(t.levelGapDb ?? 0) * 0.3
+  );
+}

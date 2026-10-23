@@ -8,9 +8,20 @@ import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { camelot, camelotLabel, EASE_BACK_S, type Schedule, songBeat, valueAt } from "@thej/mix";
+import {
+  camelot,
+  camelotLabel,
+  EASE_BACK_S,
+  keySteps,
+  pairCost,
+  type Schedule,
+  songBeat,
+  songLoudness,
+  stretchPct,
+  valueAt,
+} from "@thej/mix";
 import { apiGet, find, type LabSong, library } from "./data";
-import { loadAudio, renderHandOver, SR, songFeatures, wavBytes } from "./render";
+import { featuresIfReady, loadAudio, renderHandOver, SR, songFeatures, wavBytes } from "./render";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 /** Rendered mixes by id, newest last; a handful is plenty for A/B listening. */
@@ -109,6 +120,34 @@ export function serve(port: number) {
           "X-Trim-Db": String(f.trimDb),
         });
         return res.end(body);
+      }
+      // The cached songs that would follow this one best (pairCost): close tempo first.
+      if (url.pathname === "/matches") {
+        const songs = await library();
+        const a = find(songs, url.searchParams.get("song") ?? "");
+        const aBeat = songBeat(a, "out");
+        const ka = camelot(a.key, a.scale);
+        const fa = await songFeatures(a);
+        const rows = await Promise.all(
+          songs
+            .filter((b) => b !== a)
+            .map(async (b) => {
+              const bBeat = songBeat(b, "in");
+              const kb = camelot(b.key, b.scale);
+              // Level only when its audio has been analysed already (decoding is slow).
+              const fb = featuresIfReady(b);
+              const levelGapDb = fb
+                ? songLoudness(fb.loud) + fb.trimDb - (songLoudness(fa.loud) + fa.trimDb)
+                : undefined;
+              const t = {
+                stretchPct: aBeat && bBeat ? stretchPct(aBeat, bBeat) : 99,
+                keySteps: ka && kb ? keySteps(ka, kb) : null,
+                levelGapDb,
+              };
+              return { id: b.songId, ...t, cost: pairCost(t) };
+            }),
+        );
+        return json(res, rows.sort((x, y) => x.cost - y.cost).slice(0, 8));
       }
       // Work out a song's beats and loudness ahead of its first transition.
       if (url.pathname === "/prepare") {

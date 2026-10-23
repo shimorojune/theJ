@@ -65,22 +65,33 @@ const features = new Map<string, Promise<SongFeatures>>();
 export function songFeatures(song: LabSong): Promise<SongFeatures> {
   let p = features.get(song.songId);
   if (!p) {
-    p = loadAudio(song).then((x) => {
-      const beats = song.beats ?? [];
-      const loud = beatLoudness(x, SR, beats);
-      return {
-        beats,
-        loud,
-        duration: (x[0]?.length ?? 0) / SR,
-        mixInS: song.mixInS,
-        mixOutS: song.mixOutS,
-        trimDb: songTrim(loud, audioPeakDb(x)),
-        onsets: onsetEnvelope(x, SR),
-      };
-    });
+    p = loadAudio(song)
+      .then((x) => {
+        const beats = song.beats ?? [];
+        const loud = beatLoudness(x, SR, beats);
+        return {
+          beats,
+          loud,
+          duration: (x[0]?.length ?? 0) / SR,
+          mixInS: song.mixInS,
+          mixOutS: song.mixOutS,
+          trimDb: songTrim(loud, audioPeakDb(x)),
+          onsets: onsetEnvelope(x, SR),
+        };
+      })
+      .then((f) => {
+        ready.set(song.songId, f);
+        return f;
+      });
     features.set(song.songId, p);
   }
   return p;
+}
+
+/** A song's features if they have been worked out already, without starting the work. */
+const ready = new Map<string, SongFeatures>();
+export function featuresIfReady(song: LabSong): SongFeatures | undefined {
+  return ready.get(song.songId);
 }
 
 export type RenderOptions = {
