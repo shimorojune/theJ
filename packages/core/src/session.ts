@@ -29,6 +29,9 @@ export type QueuedSong = Song & {
   mixOutS: number | null;
   mixInBeatS: number | null;
   mixOutBeatS: number | null;
+  /** The analysed key ("Eb", "minor"), for key-matching the hand-over. */
+  key: string | null;
+  scale: string | null;
   /** Where the stem windows start, once split. */
   stemsInS: number | null;
   stemsOutS: number | null;
@@ -416,6 +419,8 @@ async function state(tx: Tx, s: Session): Promise<QueueState> {
       mixOutS: cache?.mixOutS ?? null,
       mixInBeatS: cache?.mixInBeatS ?? null,
       mixOutBeatS: cache?.mixOutBeatS ?? null,
+      key: cache?.key ?? null,
+      scale: cache?.scale ?? null,
       stemsInS: cache?.stemsInS ?? null,
       stemsOutS: cache?.stemsOutS ?? null,
       audioDurationS: cache?.durationS ?? null,

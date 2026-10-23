@@ -11,7 +11,6 @@ import { fileURLToPath } from "node:url";
 import {
   camelot,
   camelotLabel,
-  EASE_BACK_S,
   keySteps,
   pairCost,
   type Schedule,
@@ -55,7 +54,7 @@ async function transition(q: URLSearchParams) {
     // Time to separate stems and render before the earliest point it may pick.
     from: at + 8,
     startAt: at + 0.3,
-    post: EASE_BACK_S + 3.5,
+    post: 45,
   });
   const id = String(++seq);
   wavs.set(id, wavBytes(r.mix));

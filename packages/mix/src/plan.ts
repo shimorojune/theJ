@@ -15,7 +15,11 @@ export const MIX = { in: 16, out: 0 };
 export const SKIP = { in: 2, out: 2 };
 /** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */
 export const NOW = { in: 8, out: 4 };
-export const MAX_TEMPO_STRETCH = 0.08;
+/**
+ * How far the incoming song is sped up or slowed to meet the outgoing one's tempo; it then
+ * eases back to its own (easeBackS). Past this the pair is echoed out instead.
+ */
+export const MAX_TEMPO_STRETCH = 0.15;
 /**
  * Two mastered songs summed can pass full scale. Rather than turning the master down while the
  * incoming song is still coming up (the floor goes quieter), the master runs through a soft
@@ -41,6 +45,11 @@ export const BASS_HZ = 180;
 export const BASS_CUT_DB = -18;
 /** After a tempo-matched mix the new song eases back to its own tempo over this long (s). */
 export const EASE_BACK_S = 20;
+/** Bigger tempo or key moves ease back more slowly, so the drift back isn't heard. */
+export function easeBackS(rate: number, detuneCents = 0): number {
+  const pct = Math.abs(rate - 1) * 100;
+  return Math.min(40, EASE_BACK_S + Math.max(0, pct - 4) * 2 + (Math.abs(detuneCents) / 100) * 5);
+}
 
 export type Plan = { in: number; out: number };
 
@@ -167,6 +176,11 @@ export type HandOverInput = {
   /** How to switch (chooseStyle); a blend by default. */
   style?: Style;
   /**
+   * Pitch shift (cents) for the incoming song while it meets the outgoing one (keyShift), eased
+   * back to its own key after the switch, with its tempo. Not with echo out.
+   */
+  detune?: number;
+  /**
    * Loop the outgoing song from the mix point while the incoming one comes in, as a DJ sets up
    * a switch; with `roll` the loop halves over the last bar (2, 1, half a beat) into the swap.
    * Needs `outPos`, the outgoing song's position at `when` (s), and `outRate`, its rate there.
@@ -210,8 +224,13 @@ export type HandOver = {
     bass: Schedule;
     /** Low-pass cutoff (Hz) for the filter style; open (none) otherwise. */
     lowpass?: Schedule;
-    /** The tempo easing back to the song's own once it owns the floor; null at rate 1. */
-    easeBack: { at: number; dur: number; rate: Schedule } | null;
+    /** Pitch shift (cents) it starts with. */
+    detune: number;
+    /**
+     * Tempo (and pitch) easing back to the song's own once it owns the floor; null when it plays
+     * at its own tempo and key throughout.
+     */
+    easeBack: { at: number; dur: number; rate: Schedule; detune?: Schedule } | null;
   };
   /** Present when there is an outgoing song. */
   outgoing?: {
@@ -278,6 +297,7 @@ export function planHandOver(i: HandOverInput): HandOver {
     style,
     incoming: {
       offset: i.inOffset,
+      detune: style === "echo" ? 0 : (i.detune ?? 0),
       gain: { steps: [{ t: when, v: 1 }] },
       bass: { steps: [] },
       easeBack: null,
@@ -316,17 +336,27 @@ export function planHandOver(i: HandOverInput): HandOver {
       ],
     };
   }
-  if (rate !== 1)
+  const detune = h.incoming.detune;
+  if (rate !== 1 || detune !== 0) {
+    const dur = easeBackS(rate, detune);
     h.incoming.easeBack = {
       at: end,
-      dur: EASE_BACK_S,
+      dur,
       rate: {
         steps: [
           { t: end, v: rate },
-          { t: end + EASE_BACK_S, v: 1, ramp: true },
+          { t: end + dur, v: 1, ramp: true },
         ],
       },
     };
+    if (detune !== 0)
+      h.incoming.easeBack.detune = {
+        steps: [
+          { t: end, v: detune },
+          { t: end + dur, v: 0, ramp: true },
+        ],
+      };
+  }
   if (i.master == null) return h;
 
   // No dip: neither song gets quieter before the other has come up to its level (the limiter

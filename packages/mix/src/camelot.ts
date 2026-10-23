@@ -26,7 +26,10 @@ export type Camelot = { n: number; letter: "A" | "B" };
 export function camelot(key?: string | null, scale?: string | null): Camelot | null {
   const pc = key ? PITCH[key] : undefined;
   if (pc == null || !scale) return null;
-  const minor = scale.startsWith("min");
+  return camelotOf(pc, scale.startsWith("min"));
+}
+
+function camelotOf(pc: number, minor: boolean): Camelot {
   // Majors run up the wheel in fifths from C = 8B; a minor sits with its relative major.
   const major = minor ? (pc + 3) % 12 : pc;
   return { n: ((((major * 7) % 12) + 7) % 12) + 1, letter: minor ? "A" : "B" };
@@ -41,4 +44,39 @@ export const camelotLabel = (c: Camelot | null) => (c ? `${c.n}${c.letter}` : "?
 export function keySteps(a: Camelot, b: Camelot): number {
   const round = Math.min((a.n - b.n + 12) % 12, (b.n - a.n + 12) % 12);
   return round + (a.letter === b.letter ? 0 : 1);
+}
+
+/**
+ * Semitones to shift the incoming song's pitch (at most `max` either way) so its key sits with
+ * the outgoing one on the wheel (a step or less): 0 when it already does, or when no shift
+ * within reach helps.
+ */
+export function keyShift(
+  out: { key?: string | null; scale?: string | null },
+  inc: { key?: string | null; scale?: string | null },
+  max = 2,
+): number {
+  const a = camelot(out.key, out.scale);
+  const pc = inc.key ? PITCH[inc.key] : undefined;
+  if (!a || pc == null || !inc.scale) return 0;
+  const minor = inc.scale.startsWith("min");
+  let best = { shift: 0, steps: keySteps(a, camelotOf(pc, minor)) };
+  if (best.steps <= 1) return 0;
+  for (let d = 1; d <= max; d++)
+    for (const shift of [d, -d]) {
+      const steps = keySteps(a, camelotOf((pc + shift + 12) % 12, minor));
+      if (steps < best.steps) best = { shift, steps };
+    }
+  return best.steps <= 1 ? best.shift : 0;
+}
+
+/** A key on the wheel after shifting its pitch by `semis` semitones. */
+export function camelotShifted(
+  key: string | null | undefined,
+  scale: string | null | undefined,
+  semis: number,
+): Camelot | null {
+  const pc = key ? PITCH[key] : undefined;
+  if (pc == null || !scale) return null;
+  return camelotOf((((pc + semis) % 12) + 12) % 12, scale.startsWith("min"));
 }

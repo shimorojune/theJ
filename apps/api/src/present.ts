@@ -21,6 +21,8 @@ export function toSong(
   | "mixOutS"
   | "mixInBeatS"
   | "mixOutBeatS"
+  | "key"
+  | "scale"
   | "bpm"
   | "audioUrl"
   | "previewUrl"
@@ -72,6 +74,8 @@ export function toQueueTrack(q: QueuedSong): QueueTrack {
     mixOutS: q.mixOutS,
     mixInBeatS: q.mixInBeatS,
     mixOutBeatS: q.mixOutBeatS,
+    key: q.key,
+    scale: q.scale,
     previewUrl: q.hasPreview
       ? signAudioUrl(env.PUBLIC_API_URL, q.id, env.AUDIO_URL_SIGNING_SECRET, 6 * 3600, "preview")
       : null,

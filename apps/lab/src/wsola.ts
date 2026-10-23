@@ -27,6 +27,8 @@ export function stretchDeck(
   frames: number,
   sampleRate: number,
   rateAt: (frame: number) => number,
+  /** Pitch shift (cents) per quantum, as the source's detune param: the stretcher resamples. */
+  detuneAt?: (frame: number) => number,
 ): Float32Array[] & { latency: number } {
   const channels = src.length;
   let windowSize = framesFromMs(sampleRate, OLA_WINDOW_MS);
@@ -58,6 +60,7 @@ export function stretchDeck(
   const targetEnergy = new Float64Array(channels);
 
   let synthesisPosition = 0;
+  let pitch = 1;
   let targetBlockIndex = 0;
   let searchBlockIndex = 0;
 
@@ -65,8 +68,11 @@ export function stretchDeck(
     const q = input[ch] as Float32Array;
     const size = Math.min(fed, q.length);
     if (i < 0 || size === 0) return 0;
-    if (i >= size - 1) return q[size - 1] as number;
-    return q[i] as number;
+    const x = i * pitch;
+    if (x >= size - 1) return q[size - 1] as number;
+    const i0 = Math.floor(x);
+    const f = x - i0;
+    return f === 0 ? (q[i0] as number) : (q[i0] as number) * (1 - f) + (q[i0 + 1] as number) * f;
   };
   const fillBlock = (block: Float32Array[], at: number) => {
     for (let ch = 0; ch < channels; ch++) {
@@ -74,7 +80,7 @@ export function stretchDeck(
       for (let f = 0; f < windowSize; f++) b[f] = sampleAt(ch, at + f);
     }
   };
-  const maxSourceIndexForBlock = (b: number) => b + windowSize - 1;
+  const maxSourceIndexForBlock = (b: number) => Math.ceil((b + windowSize - 1) * pitch);
   const inputFrames = () => Math.min(fed, input[0]?.length ?? 0);
   const canRun = () =>
     maxSourceIndexForBlock(targetBlockIndex) < inputFrames() &&
@@ -167,7 +173,7 @@ export function stretchDeck(
     }
     produced += hop;
     targetBlockIndex = index + hop;
-    synthesisPosition += hop * rate;
+    synthesisPosition += (hop * rate) / pitch;
     searchBlockIndex = Math.floor(synthesisPosition + 0.5) - searchCenterOffset;
     return true;
   };
@@ -185,6 +191,7 @@ export function stretchDeck(
   for (let q = 0; q < frames; q += QUANTUM) {
     const n = Math.min(QUANTUM, frames - q);
     const rate = Math.min(4, Math.max(0, rateAt(q)));
+    pitch = detuneAt ? 2 ** (detuneAt(q) / 1200) : 1;
     if (rate <= 0) continue;
     fed += Math.max(1, Math.ceil(rate * n));
     let rendered = 0;

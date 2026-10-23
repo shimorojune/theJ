@@ -2,6 +2,7 @@ import {
   apply,
   BASS_HZ,
   type HandOver,
+  keyShift,
   LIMITER_INPUT,
   limiterCurve,
   MIX,
@@ -635,6 +636,8 @@ export class MixerEngine implements Engine {
       // Tempos too far apart to match: echo the old song out and drop the new one on the one.
       style:
         cur?.kind === "full" && deck.kind === "full" && rate === 1 && !sameTempo ? "echo" : "blend",
+      // Into a key that sits with the outgoing song's, eased back after.
+      detune: reason === "complete" && cur ? keyShift(cur.song, deck.song) * 100 : 0,
       // A planned mix loops the outgoing song from the mix point.
       loop: reason === "complete" && cur?.kind === "full" ? OUT_LOOP : null,
       outPos: cur ? this.positionAt(cur, when) : undefined,
@@ -646,8 +649,10 @@ export class MixerEngine implements Engine {
     apply(deck.filter.gain, h.incoming.bass);
     apply(deck.lowpass.frequency, h.incoming.lowpass);
     this.startDeck(deck, when, offset, h.rate);
+    deck.source.detune.setValueAtTime(h.incoming.detune, when);
     if (h.incoming.easeBack) {
       apply(deck.source.playbackRate, h.incoming.easeBack.rate);
+      apply(deck.source.detune, h.incoming.easeBack.detune);
       deck.ramp = { at: h.incoming.easeBack.at, dur: h.incoming.easeBack.dur };
     }
     if (cur && h.outgoing) {

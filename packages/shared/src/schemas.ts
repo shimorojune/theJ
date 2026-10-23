@@ -52,6 +52,9 @@ export const QueueTrack = z.object({
   /** Beat length (s) at each mix point, fitted to the audio; null on older analyses. */
   mixInBeatS: z.number().nullable(),
   mixOutBeatS: z.number().nullable(),
+  /** The analysed key and scale ("Eb", "minor"), for key-matching the hand-over. */
+  key: z.string().nullable().optional(),
+  scale: z.string().nullable().optional(),
   /** Signed 30-second preview the phone can start on at once; null when there is none. */
   previewUrl: z.string().url().nullable(),
   /** Where the preview sits inside the full audio; known once the full song is pulled. */

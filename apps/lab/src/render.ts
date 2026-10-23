@@ -7,11 +7,13 @@ import {
   beatLoudness,
   camelot,
   camelotLabel,
+  camelotShifted,
   chooseMixPoints,
   chooseStyle,
   type Features,
   fitToOnsets,
   type HandOver,
+  keyShift,
   keySteps,
   LIMITER_INPUT,
   LIMITER_KNEE,
@@ -117,6 +119,8 @@ export type RenderOptions = {
   trim?: boolean;
   /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats, no roll. */
   loop?: { beats: number; roll?: boolean } | null;
+  /** Shift the incoming song into a key that sits with the outgoing one. Default on. */
+  keyMatch?: boolean;
   /** Hand over stem by stem (blend only); default on when the mix lab's Python is present. */
   stems?: boolean;
   /** How to switch; "auto" (default) lets chooseStyle pick from the pair. */
@@ -333,6 +337,8 @@ export async function renderHandOver(
       inLengths: { drums: inLen, other: inLen, rest: inLen },
     };
   }
+  // Into a key that sits with the outgoing one (a semitone or two), eased back after.
+  const shift = opts.keyMatch === false ? 0 : keyShift(a, b);
   const h = planHandOver({
     when,
     plan,
@@ -341,6 +347,7 @@ export async function renderHandOver(
     inOffset,
     master: 1,
     style,
+    detune: shift * 100,
     stems: stemInput,
     loop,
     outPos: startAt + when,
@@ -359,8 +366,14 @@ export async function renderHandOver(
   );
   const whenF = Math.round(when * SR);
   const ease = h.incoming.easeBack;
-  const deckBRaw = stretchDeck(xb, Math.round(inOffset * SR), frames - whenF, SR, (f) =>
-    ease ? valueAt(ease.rate, when + f / SR, rate) : rate,
+  const deckBRaw = stretchDeck(
+    xb,
+    Math.round(inOffset * SR),
+    frames - whenF,
+    SR,
+    (f) => (ease ? valueAt(ease.rate, when + f / SR, rate) : rate),
+    (f) =>
+      ease?.detune ? valueAt(ease.detune, when + f / SR, h.incoming.detune) : h.incoming.detune,
   );
   const deckB = deckBRaw.map((c) => {
     const full = new Float32Array(frames);
@@ -470,7 +483,15 @@ export async function renderHandOver(
         if (!src) continue;
         const at = Math.round(v.at * SR);
         const n = Math.max(1, Math.min(frames - at, Math.round((v.stopAt - v.at) * SR)));
-        const played = stretchDeck(src, Math.round(v.offset * SR), n, SR, () => v.rate);
+        const cents = v === h.stems.in ? h.incoming.detune : 0;
+        const played = stretchDeck(
+          src,
+          Math.round(v.offset * SR),
+          n,
+          SR,
+          () => v.rate,
+          () => cents,
+        );
         const buf = ctx.createBuffer(2, frames, SR);
         for (let c = 0; c < 2; c++) {
           const full = new Float32Array(frames);
@@ -533,8 +554,16 @@ export async function renderHandOver(
       b: `${b.title} · ${b.artist}`,
       bpm: `${r1(60 / beat)} → ${inBeat ? r1(60 / inBeat) : "?"}`,
       rate: Math.round(rate * 10000) / 10000,
-      keys: `${camelotLabel(ka)} → ${camelotLabel(kb)}`,
-      keySteps: ka && kb ? keySteps(ka, kb) : null,
+      keys: `${camelotLabel(ka)} → ${camelotLabel(kb)}${
+        h.incoming.detune
+          ? ` (shifted ${h.incoming.detune > 0 ? "+" : ""}${h.incoming.detune / 100} st)`
+          : ""
+      }`,
+      // As heard: after the key shift, if any.
+      keySteps: (() => {
+        const heard = camelotShifted(b.key, b.scale, h.incoming.detune / 100);
+        return ka && heard ? keySteps(ka, heard) : null;
+      })(),
       style: h.style,
       stems: Boolean(h.stems),
       points: {
