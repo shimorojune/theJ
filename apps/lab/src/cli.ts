@@ -6,6 +6,7 @@
  *   pnpm mix render <A> <B> [--plan 16/8] [--pre 16] [--post 16]
  *                                      one hand-over to apps/lab/out/<A>__<B>.wav, plus its score
  *   pnpm mix bench [--n 20]            score many tempo-matchable pairs, write out/bench.md
+ *   pnpm mix lab [--port 4400]         the same in a browser: pick pairs, change the plan, listen
  *
  * A and B are song ids or words from the title/artist. Env: THEJ_API, THEJ_DEV_TOKEN (falls
  * back to apps/mobile/.env), THEJ_DEV_USER.
@@ -16,6 +17,7 @@ import { parseArgs } from "node:util";
 import { camelot, keySteps, MAX_TEMPO_STRETCH, matchRate, songBeat } from "@thej/mix";
 import { fetchSongs, find, type LabSong, library, OUT } from "./data";
 import { renderHandOver, type Score, writeWav } from "./render";
+import { serve } from "./server";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -26,6 +28,7 @@ const { positionals, values } = parseArgs({
     post: { type: "string", default: "16" },
     n: { type: "string", default: "20" },
     json: { type: "boolean", default: false },
+    port: { type: "string", default: "4400" },
   },
 });
 const [cmd, ...args] = positionals;
@@ -66,6 +69,7 @@ function show(s: Score) {
 
 async function main() {
   if (cmd === "fetch") return fetchSongs(Number(values.limit));
+  if (cmd === "lab") return serve(Number(values.port));
   const songs = await library();
   if (cmd === "list") {
     const q = args.join(" ").toLowerCase();
@@ -138,7 +142,7 @@ async function main() {
     console.log(`  ${join(OUT, "bench.md")}`);
     return;
   }
-  console.log("usage: pnpm mix fetch | list [words] | render <A> <B> | bench");
+  console.log("usage: pnpm mix fetch | list [words] | render <A> <B> | bench | lab");
 }
 
 main().catch((e) => {

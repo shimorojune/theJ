@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>theJ DJ lab</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #fff; --ink: #1b1b1b; --muted: #6b6b6b; --line: #e2e0da;
+    --a: #2f6fdb; --b: #e0702a; --master: #8a8a8a; --good: #1f9d55; --bad: #d23c3c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121212; --panel: #1c1c1c; --ink: #ececec; --muted: #9a9a9a; --line: #2e2e2e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 60px; display: grid; gap: 16px; }
+  h1 { font-size: 18px; margin: 0; } h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+  label { display: grid; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, button { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  input.song { width: min(360px, 100%); } input.num { width: 64px; }
+  button { cursor: pointer; } button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button:disabled { opacity: .5; cursor: wait; }
+  canvas { width: 100%; height: 220px; display: block; cursor: pointer; }
+  audio { width: 100%; margin-top: 8px; }
+  .score { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; font-variant-numeric: tabular-nums; }
+  .score dt { color: var(--muted); } .score dd { margin: 0; }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; margin-bottom: 6px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; }
+  ul { list-style: none; margin: 0; padding: 0; } li { padding: 5px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; } li button { padding: 2px 8px; font-size: 12px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .muted { color: var(--muted); } .err { color: var(--bad); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>theJ DJ lab <span class="muted" style="font-weight:400">· the phone's hand-over, rendered on your Mac</span></h1>
+
+  <section>
+    <h2>Hand-over</h2>
+    <div class="row">
+      <label>Outgoing (A)<input class="song" id="a" list="songs" placeholder="type a title" /></label>
+      <label>Incoming (B)<input class="song" id="b" list="songs" placeholder="type a title" /></label>
+      <button type="button" id="swap" title="Swap A and B">⇄</button>
+      <button type="button" id="random">Random matchable pair</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label>Beats in<input class="num" id="in" type="number" value="16" min="1" /></label>
+      <label>Beats out<input class="num" id="out" type="number" value="8" min="1" /></label>
+      <label>A before (s)<input class="num" id="pre" type="number" value="12" min="2" /></label>
+      <label>B after (s)<input class="num" id="post" type="number" value="12" min="2" /></label>
+      <button type="button" class="primary" id="go">Render and play</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <datalist id="songs"></datalist>
+  </section>
+
+  <section>
+    <div class="legend">
+      <span><i style="background:var(--a)"></i>A level</span>
+      <span><i style="background:var(--b)"></i>B level</span>
+      <span><i style="background:var(--a);opacity:.4"></i>A bass cut</span>
+      <span><i style="background:var(--b);opacity:.4"></i>B bass cut</span>
+      <span><i style="background:var(--master)"></i>master</span>
+      <span>dots: beat lag per bar (green within 20 ms)</span>
+    </div>
+    <canvas id="tl"></canvas>
+    <audio id="player" controls><track kind="captions" /></audio>
+  </section>
+
+  <div class="grid2">
+    <section><h2>Score</h2><dl class="score" id="score"><dt class="muted">—</dt><dd class="muted">Render a pair to see it.</dd></dl></section>
+    <section><h2>Renders this session</h2><ul id="history"><li class="muted">None yet.</li></ul></section>
+  </div>
+
+  <section>
+    <h2>What the picker returns</h2>
+    <div class="row">
+      <label>Mood words<input id="mood" value="dance party" style="width:260px" /></label>
+      <label>Languages<input id="lang" value="en,hi" style="width:90px" /></label>
+      <button type="button" id="ask">Ask the server</button>
+    </div>
+    <ul id="picks" style="margin-top:10px"></ul>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let songs = [];
+let current = null;
+const history = [];
+
+const label = (s) => `${s.title} · ${s.artist}`;
+const byLabel = (v) => songs.find((s) => label(s) === v || s.id === v);
+
+async function getJson(url) {
+  const r = await fetch(url);
+  const body = await r.json();
+  if (!r.ok) throw new Error(body.error || r.statusText);
+  return body;
+}
+
+// The phone's tempo rule (packages/mix matchRate): within 8%, half and double time allowed.
+function rate(a, b) {
+  if (!a.outBeat || !b.inBeat) return 1;
+  const r = b.inBeat / a.outBeat;
+  const best = [r, r / 2, r * 2].reduce((p, c) => (Math.abs(c - 1) < Math.abs(p - 1) ? c : p));
+  return Math.abs(best - 1) <= 0.08 ? best : 1;
+}
+
+async function loadSongs() {
+  songs = await getJson("/songs");
+  $("songs").innerHTML = songs.map((s) => `<option value="${label(s).replace(/"/g, "&quot;")}">${s.bpm?.toFixed(1)} bpm · ${s.key}</option>`).join("");
+  $("status").textContent = `${songs.length} cached songs`;
+}
+
+function randomPair() {
+  for (let i = 0; i < 500; i++) {
+    const a = songs[Math.floor(Math.random() * songs.length)];
+    const b = songs[Math.floor(Math.random() * songs.length)];
+    if (a !== b && rate(a, b) !== 1) {
+      $("a").value = label(a);
+      $("b").value = label(b);
+      return;
+    }
+  }
+}
+
+async function go() {
+  const a = byLabel($("a").value), b = byLabel($("b").value);
+  if (!a || !b) { $("status").innerHTML = `<span class="err">Pick both songs from the list.</span>`; return; }
+  $("go").disabled = true;
+  $("status").textContent = "Rendering…";
+  try {
+    const q = new URLSearchParams({ a: a.id, b: b.id, in: $("in").value, out: $("out").value, pre: $("pre").value, post: $("post").value });
+    const r = await getJson(`/render?${q}`);
+    const plan = `${$("in").value}/${$("out").value}`;
+    current = { ...r, plan };
+    history.unshift(current);
+    showScore(r.score);
+    showHistory();
+    playFrom(r);
+    $("status").textContent = "";
+  } catch (e) {
+    $("status").innerHTML = `<span class="err">${e.message}</span>`;
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+// Start a few seconds before the mix point, once the WAV has loaded enough to seek.
+async function playFrom(r) {
+  const p = $("player");
+  // As a blob, so the player can seek without range requests.
+  r.blob ??= URL.createObjectURL(await (await fetch(r.wav)).blob());
+  p.src = r.blob;
+  p.addEventListener("loadedmetadata", () => {
+    p.currentTime = Math.max(0, r.score.timeline.when - 4);
+    p.play().catch(() => {});
+  }, { once: true });
+}
+
+function showScore(s) {
+  const ms = (v) => (v == null ? "–" : `${v > 0 ? "+" : ""}${v} ms`);
+  const tight = s.lagMs != null && Math.abs(s.lagMs) <= 20;
+  const dip = s.loudness.before - s.loudness.low;
+  const rows = [
+    ["A", s.a], ["B", s.b],
+    ["Tempo", `${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`],
+    ["Key", `${s.keys} ${s.keySteps == null ? "" : s.keySteps <= 1 ? '<span class="good">compatible</span>' : `<span class="bad">${s.keySteps} steps apart</span>`}`],
+    ["Beats", `${ms(s.lagMs)} median, drift ${ms(s.driftMs)} <span class="${tight ? "good" : "bad"}">${s.lagMs == null ? "" : tight ? "tight" : "flams"}</span>`],
+    ["Per bar", s.bars.join("  ")],
+    ["Level", `${s.loudness.before} dB before, ${s.loudness.low} to ${s.loudness.high} dB through it ${dip >= 6 ? `<span class="bad">drops ${dip.toFixed(0)} dB</span>` : ""}`],
+    ["Peak", `${s.peakDb} dBFS (louder deck alone ${s.deckPeakDb}) ${s.peakDb > 0 ? '<span class="bad">clips</span>' : ""}`],
+    ["Start", `A ${s.startLatencyMs.a} ms, B ${s.startLatencyMs.b} ms late (stretcher warm-up)`],
+    ["Plan", `B in ${s.timeline.when}s, bass swap ${s.timeline.swap}s, A gone ${s.timeline.end}s`],
+  ];
+  $("score").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+}
+
+function showHistory() {
+  $("history").innerHTML = history.map((h, i) => {
+    const s = h.score;
+    const tight = s.lagMs != null && Math.abs(s.lagMs) <= 20;
+    return `<li><button data-i="${i}">play</button> ${s.a.split(" · ")[0]} → ${s.b.split(" · ")[0]} <span class="muted">${h.plan}</span> <span class="${tight ? "good" : "bad"}">${s.lagMs ?? "–"} ms</span></li>`;
+  }).join("");
+}
+
+$("history").addEventListener("click", (e) => {
+  const i = e.target.dataset?.i;
+  if (i == null) return;
+  current = history[Number(i)];
+  showScore(current.score);
+  playFrom(current);
+});
+
+function draw() {
+  const c = $("tl"), dpr = devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+  if (current) {
+    const { total, curves, score } = current;
+    const x = (t) => (t / total) * w;
+    const top = 10, bottom = h - 36, span = bottom - top;
+    g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "11px system-ui";
+    for (const [t, name] of [[score.timeline.when, "B in"], [score.timeline.swap, "bass swap"], [score.timeline.end, "A gone"]]) {
+      g.beginPath(); g.moveTo(x(t), top); g.lineTo(x(t), bottom); g.stroke();
+      g.fillText(name, x(t) + 3, top + 10);
+    }
+    const line = (vals, color, map, alpha = 1, dash = []) => {
+      g.strokeStyle = color; g.globalAlpha = alpha; g.setLineDash(dash); g.lineWidth = 2;
+      g.beginPath();
+      vals.forEach((v, i) => { const px = x(i / 20), py = bottom - map(v) * span; i ? g.lineTo(px, py) : g.moveTo(px, py); });
+      g.stroke(); g.globalAlpha = 1; g.setLineDash([]);
+    };
+    const lvl = (v) => v, cut = (v) => -v / 18 * 0.5;
+    line(curves.master, css("--master"), lvl, 1, [4, 3]);
+    line(curves.aBass, css("--a"), cut, 0.4);
+    line(curves.bBass, css("--b"), cut, 0.4);
+    line(curves.aGain, css("--a"), lvl);
+    line(curves.bGain, css("--b"), lvl);
+    // Per-bar lag: one dot per two-bar window, height by lag (±100 ms).
+    const beat = score.timeline.beat, y0 = h - 16;
+    g.strokeStyle = css("--line"); g.beginPath(); g.moveTo(0, y0); g.lineTo(w, y0); g.stroke();
+    score.bars.forEach((lag, i) => {
+      const t = score.timeline.when + i * 4 * beat + 4 * beat;
+      g.fillStyle = Math.abs(lag) <= 20 ? css("--good") : css("--bad");
+      g.beginPath(); g.arc(x(t), y0 - Math.max(-14, Math.min(14, lag / 100 * 14)), 3.5, 0, 7); g.fill();
+    });
+    const t = $("player").currentTime || 0;
+    g.strokeStyle = css("--ink"); g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(x(t), 0); g.lineTo(x(t), h); g.stroke();
+  } else {
+    g.fillStyle = css("--muted"); g.font = "13px system-ui";
+    g.fillText("Pick two songs and render to see the hand-over here.", 12, 24);
+  }
+  requestAnimationFrame(draw);
+}
+
+$("tl").addEventListener("click", (e) => {
+  if (!current) return;
+  const r = e.target.getBoundingClientRect();
+  $("player").currentTime = ((e.clientX - r.left) / r.width) * current.total;
+  $("player").play().catch(() => {});
+});
+
+async function ask() {
+  $("picks").innerHTML = '<li class="muted">Asking…</li>';
+  try {
+    const r = await getJson(`/pick?${new URLSearchParams({ text: $("mood").value, lang: $("lang").value })}`);
+    $("picks").innerHTML = (r.artists?.length ? `<li class="muted">Artists heard: ${r.artists.join(", ")}</li>` : "") +
+      r.picks.map((p) => {
+        const s = songs.find((x) => x.title.toLowerCase() === p.title.toLowerCase());
+        return `<li>${s ? `<button data-b="${s.id}">use as B</button> ` : '<span class="muted">not cached</span> '}${p.title} · ${p.artist} <span class="muted">${(p.langs || []).join(",")} · ${p.score?.toFixed?.(3) ?? ""}</span></li>`;
+      }).join("");
+  } catch (e) {
+    $("picks").innerHTML = `<li class="err">${e.message}</li>`;
+  }
+}
+$("picks").addEventListener("click", (e) => {
+  const id = e.target.dataset?.b;
+  const s = id && songs.find((x) => x.id === id);
+  if (s) $("b").value = label(s);
+});
+
+$("go").onclick = go;
+$("random").onclick = randomPair;
+$("swap").onclick = () => { const v = $("a").value; $("a").value = $("b").value; $("b").value = v; };
+$("ask").onclick = ask;
+loadSongs().then(randomPair).catch((e) => ($("status").innerHTML = `<span class="err">${e.message}</span>`));
+draw();
+</script>
+</body>
+</html>

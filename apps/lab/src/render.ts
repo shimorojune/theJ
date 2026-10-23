@@ -208,8 +208,12 @@ export async function renderHandOver(
   };
 }
 
-/** 16-bit stereo WAV. */
 export async function writeWav(path: string, x: Float32Array[], sampleRate = SR) {
+  await writeFile(path, wavBytes(x, sampleRate));
+}
+
+/** 16-bit stereo WAV. */
+export function wavBytes(x: Float32Array[], sampleRate = SR): Buffer {
   const n = x[0]?.length ?? 0;
   const buf = Buffer.alloc(44 + n * 4);
   buf.write("RIFF", 0);
@@ -232,5 +236,5 @@ export async function writeWav(path: string, x: Float32Array[], sampleRate = SR)
       );
       buf.writeInt16LE(Math.round(v * 32767), 44 + i * 4 + c * 2);
     }
-  await writeFile(path, buf);
+  return buf;
 }
