@@ -7,7 +7,14 @@ import { MIX, matchRate, onGrid, planHandOver, valueAt } from "./plan";
 const close = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-9, `${a} != ${b}`);
 
 test("classic hand-over: 16 beats in, bass swap, 8 out", () => {
-  const h = planHandOver({ when: 10, plan: MIX, beat: 0.5, rate: 1.02, inOffset: 3, master: 1 });
+  const h = planHandOver({
+    when: 10,
+    plan: { in: 16, out: 8 },
+    beat: 0.5,
+    rate: 1.02,
+    inOffset: 3,
+    master: 1,
+  });
   close(h.swap, 18);
   close(h.end, 22);
   assert.equal(h.stems, undefined);
@@ -24,7 +31,7 @@ test("stem hand-over ends a beat later and leaves the incoming bass shelf alone"
   const len = 60;
   const h = planHandOver({
     when: 10,
-    plan: MIX,
+    plan: { in: 16, out: 8 },
     beat: 0.5,
     rate: 1,
     inOffset: 30,
@@ -50,7 +57,7 @@ test("stem hand-over ends a beat later and leaves the incoming bass shelf alone"
 test("stems that don't cover the mix fall back to the classic hand-over", () => {
   const h = planHandOver({
     when: 10,
-    plan: MIX,
+    plan: { in: 16, out: 8 },
     beat: 0.5,
     rate: 1,
     inOffset: 30,

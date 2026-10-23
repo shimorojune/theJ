@@ -6,10 +6,11 @@
  */
 
 /**
- * A planned mix: the next song runs beat-matched under the current one with its bass cut for
- * IN beats, the bass swaps on a beat, and the current song drops out over OUT beats.
+ * A planned mix: the next song comes up beat-matched under the current one with its bass cut
+ * for IN beats; on the swap beat the current song is cut away within OUT beats, as a DJ
+ * switches, rather than left fading over the new one.
  */
-export const MIX = { in: 16, out: 8 };
+export const MIX = { in: 16, out: 1 };
 /** A skip is the same move, just fast. */
 export const SKIP = { in: 2, out: 2 };
 /** "Mix it in now" and tapping Up next: a short DJ mix from the next bar. */

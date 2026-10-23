@@ -34,7 +34,7 @@ async function transition(q: URLSearchParams) {
   const b = find(songs, q.get("b") ?? "");
   const at = Number(q.get("at") ?? 0);
   const r = await renderHandOver(a, b, {
-    plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 8) },
+    plan: { in: Number(q.get("in") ?? 16), out: Number(q.get("out") ?? 1) },
     mode: q.get("mode") === "analysed" ? "analysed" : "choose",
     loop:
       Number(q.get("loop") ?? 8) > 0

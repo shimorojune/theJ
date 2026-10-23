@@ -3,7 +3,7 @@
  *
  *   pnpm mix fetch [--limit 60]          pulled songs + analysis from the api, audio cached locally
  *   pnpm mix list [words]              cached songs that can be mixed
- *   pnpm mix render <A> <B> [--plan 16/8] [--from s] [--analysed] [--pre 16] [--post 16]
+ *   pnpm mix render <A> <B> [--plan 16/1] [--from s] [--analysed] [--pre 16] [--post 16]
  *                                      one hand-over to apps/lab/out/<A>__<B>.wav, plus its score.
  *                                      By default the DJ is asked for B at --from (A's time, default
  *                                      30 s before its mix-out) and waits for the best matching
@@ -29,7 +29,7 @@ const { positionals, values } = parseArgs({
   allowPositionals: true,
   options: {
     limit: { type: "string", default: "60" },
-    plan: { type: "string", default: "16/8" },
+    plan: { type: "string", default: "16/1" },
     pre: { type: "string", default: "16" },
     post: { type: "string", default: "16" },
     n: { type: "string", default: "20" },
@@ -47,7 +47,7 @@ const slug = (s: LabSong) => s.songId.replace(/[^A-Za-z0-9_-]/g, "_");
 
 function planOf(text: string) {
   const [i, o] = text.split("/").map(Number);
-  if (!i || !o) throw new Error(`--plan is beats in/out, e.g. 16/8 (got ${text})`);
+  if (!i || !o) throw new Error(`--plan is beats in/out, e.g. 16/1 (got ${text})`);
   return { in: i, out: o };
 }
 

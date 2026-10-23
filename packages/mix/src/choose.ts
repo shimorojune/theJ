@@ -151,7 +151,7 @@ const nearest = (beats: number[], t: number) => {
  *   loudness gap between the songs over the overlap (trims included)
  *   + either song sitting well below its own usual level there (two matching breakdowns are
  *     equally loud, but the floor goes quiet), or the outgoing song having just dropped into it
- *   + how far the incoming song drops below the outgoing one once it owns the floor
+ *   + how far the incoming song, alone after the switch, sits below the outgoing one
  *   + beat wobble in either window (a steady grid is what makes the beats lock)
  *   + a pair too far apart in tempo to match
  *   + a little for every second waited, and for every second of the incoming song skipped.
@@ -206,7 +206,8 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
     for (const j of ins) {
       const gb = inGrid.get(j) as ReturnType<typeof fitGrid>;
       const lb = mean(b.loud, j, j + span) + inTrim;
-      const after = mean(b.loud, j + span, j + span + 16) + inTrim;
+      // The incoming song alone, right after the switch: it must hold the floor at once.
+      const after = mean(b.loud, j + o.plan.in, j + o.plan.in + 16) + inTrim;
       const matched = matchRate(ga.beat, 1, gb.beat) !== 1 || Math.abs(ga.beat - gb.beat) < 1e-4;
       const outS = ga.t;
       const inS = gb.t;
@@ -215,7 +216,7 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
         below(aUsual, la) +
         below(bUsual, lb) +
         below(lead, la) +
-        Math.max(0, la - after - 3) * 0.5 +
+        Math.max(0, la - after - 1.5) +
         (ga.jitterMs + gb.jitterMs) / 5 +
         (matched ? 0 : 6) +
         0.04 * Math.max(0, outS - o.from) +
