@@ -25,6 +25,7 @@ import { camelot, keySteps, MAX_TEMPO_STRETCH, matchRate, songBeat } from "@thej
 import { fetchSongs, find, type LabSong, library, OUT } from "./data";
 import { fadeOut, renderHandOver, type Score, writeWav } from "./render";
 import { serve } from "./server";
+import { stopStems } from "./stems";
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
@@ -57,7 +58,7 @@ function show(s: Score) {
   const ms = (v: number | null) => (v == null ? "-" : `${v > 0 ? "+" : ""}${v} ms`);
   const flam = s.lagMs == null ? "" : Math.abs(s.lagMs) <= 20 ? "  tight" : "  flams (over 20 ms)";
   console.log(`${s.a}\n  → ${s.b}`);
-  console.log(`  style   ${s.style}`);
+  console.log(`  style   ${s.style}${s.stems ? ", stem by stem" : ""}`);
   console.log(
     `  tempo   ${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`,
   );
@@ -191,7 +192,11 @@ async function main() {
   console.log("usage: pnpm mix fetch | list [words] | render <A> <B> | bench | lab");
 }
 
-main().catch((e) => {
-  console.error((e as Error).message);
-  process.exit(1);
-});
+main()
+  .catch((e) => {
+    console.error((e as Error).message);
+    process.exitCode = 1;
+  })
+  .finally(() => {
+    if (cmd !== "lab") stopStems();
+  });

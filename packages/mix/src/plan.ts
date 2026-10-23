@@ -252,15 +252,17 @@ export function planHandOver(i: HandOverInput): HandOver {
   const inS = style === "blend" ? Math.min(14, i.plan.in * beat) : 0;
   const outS = Math.min(8, i.plan.out * beat);
   const swap = when + inS;
+  // With stems the outgoing drums and music trail off over the tail too, never at once.
+  const stemOut = outS > 0 ? outS : TAIL_BEATS * beat;
   const stems =
     style === "blend" && i.master != null && i.stems
-      ? stemHandOver(i.stems, when, rate, i.inOffset, inS, outS, beat)
+      ? stemHandOver(i.stems, when, rate, i.inOffset, inS, stemOut, beat)
       : null;
   // Blend and cut leave with a tail: on the switch the outgoing lows go (no second kick under
   // the new downbeat), and the rest of it fades over TAIL_BEATS, so it never just stops.
   const tailS =
     !stems && outS === 0 && (style === "blend" || style === "cut") ? TAIL_BEATS * beat : 0;
-  const end = swap + outS + tailS + (stems ? beat : 0);
+  const end = stems ? swap + stemOut + beat : swap + outS + tailS;
   // A clean switch: the old song is gone just before the new song's downbeat, so the two
   // downbeats never land together (a flam, or a doubled beat).
   const cutAt = Math.max(when, swap - SWITCH_S);

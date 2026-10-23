@@ -3,6 +3,7 @@ import {
   apply,
   audioPeakDb,
   BASS_HZ,
+  beatActivity,
   beatLoudness,
   camelot,
   camelotLabel,
@@ -22,14 +23,17 @@ import {
   type Plan,
   planHandOver,
   type Schedule,
+  type StemInput,
   type Style,
   songBeat,
   songTrim,
+  TAIL_BEATS,
   valueAt,
 } from "@thej/mix";
 import { OfflineAudioContext } from "node-web-audio-api";
 import { audioPath, type LabSong } from "./data";
 import { barLags, ENV_HZ, loudness, median, onsetEnvelope, peakDb } from "./metrics";
+import { type Stems, separate, stemEnvelopes, stemsAvailable } from "./stems";
 import { stretchDeck } from "./wsola";
 
 /** Android's usual output rate; the phone's AudioContext runs at the device rate. */
@@ -113,6 +117,8 @@ export type RenderOptions = {
   trim?: boolean;
   /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats, no roll. */
   loop?: { beats: number; roll?: boolean } | null;
+  /** Hand over stem by stem (blend only); default on when the mix lab's Python is present. */
+  stems?: boolean;
   /** How to switch; "auto" (default) lets chooseStyle pick from the pair. */
   style?: Style | "auto";
 };
@@ -127,8 +133,9 @@ export type Score = {
   keySteps: number | null;
   /** Where the mix happens: outgoing and incoming song times (s), and the wait from `from`. */
   points: { mode: string; outS: number; inS: number; waitS: number };
-  /** How it switched (chooseStyle, or as asked). */
+  /** How it switched (chooseStyle, or as asked), and whether stem by stem. */
   style: Style;
+  stems: boolean;
   /** Each song's level over the overlap and its trim (dB). */
   levels: { out: number | null; in: number | null; outTrim: number; inTrim: number };
   /** Median lag of B's beats behind A's over the overlap (ms), drift first bar to last, per bar. */
@@ -248,7 +255,18 @@ export async function renderHandOver(
   const inTrim = trim ? fb.trimDb : 0;
   const mode = opts.mode ?? "choose";
   const from = opts.from ?? Math.max(0, (a.mixOutS as number) - 30);
-  const loop = opts.loop === undefined ? { beats: 8, roll: false } : opts.loop;
+  // Vocal activity, once the song's stem envelopes have been worked out (stems.py envelopes).
+  for (const [song, f] of [
+    [a, fa],
+    [b, fb],
+  ] as const)
+    if (!f.vocals) {
+      const env = await stemEnvelopes(song);
+      if (env) f.vocals = beatActivity(env.vocals, env.hz, f.beats);
+    }
+  // A stem hand-over replaces the loop (the stems would part from a looping song).
+  const useStems = opts.stems ?? stemsAvailable();
+  const loop = useStems ? null : opts.loop === undefined ? { beats: 8, roll: false } : opts.loop;
   const chosen =
     mode === "choose"
       ? chooseMixPoints(fa, fb, {
@@ -257,7 +275,7 @@ export async function renderHandOver(
           plan,
           outTrim,
           inTrim,
-          loopBeats: loop?.beats,
+          loopBeats: loop?.beats ?? null,
         })
       : null;
   // Chosen points sit on the analysed beats; the grid there is then fitted to the audio, as the
@@ -289,6 +307,32 @@ export async function renderHandOver(
           keySteps: ka && kb ? keySteps(ka, kb) : null,
           levelJumpDb: chosen ? chosen.inAfterLoud - chosen.outLoud : 0,
         });
+  // Stems for the stretch either side of the switch: the outgoing song from a beat before the
+  // incoming one starts, the incoming one from its start, both past the end of the tail.
+  let stemInput: StemInput | null = null;
+  let stemAudio: { out: Stems; in: Stems } | null = null;
+  if (useStems && style === "blend") {
+    const inS = Math.min(14, plan.in * beat);
+    const tailS = plan.out > 0 ? Math.min(8, plan.out * beat) : TAIL_BEATS * beat;
+    const outStart = Math.max(0, startAt + when - beat - 0.5);
+    const outLen = inS + tailS + 3 * beat + 1;
+    const inStart = Math.max(0, inOffset - 0.25);
+    const inLen = (inS + tailS + 3 * beat) * matchedRate + 1;
+    const [so, si] = await Promise.all([
+      separate(a.songId, xa, SR, outStart, outLen),
+      separate(b.songId, xb, SR, inStart, inLen),
+    ]);
+    stemAudio = { out: so, in: si };
+    stemInput = {
+      now: 0,
+      outPosAt: (t) => startAt + t,
+      outRateAt: () => 1,
+      outStart,
+      inStart,
+      outLengths: { vocals: outLen, bass: outLen, rest: outLen },
+      inLengths: { drums: inLen, other: inLen, rest: inLen },
+    };
+  }
   const h = planHandOver({
     when,
     plan,
@@ -297,6 +341,7 @@ export async function renderHandOver(
     inOffset,
     master: 1,
     style,
+    stems: stemInput,
     loop,
     outPos: startAt + when,
     outRate: 1,
@@ -400,6 +445,54 @@ export async function renderHandOver(
   A.source.start(0);
   A.source.stop(h.outgoing?.stopAt ?? total);
   B.source.start(0);
+  if (h.stems && stemAudio) {
+    // Each stem as a voice of its own, through the same stretcher and trim as its deck.
+    const parts = (st: Stems): Record<string, Float32Array[]> => ({
+      drums: st.drums,
+      bass: st.bass,
+      other: st.other,
+      vocals: st.vocals,
+      // The parts the planner names "rest": the rest of each song, summed.
+      outRest: st.drums.map((c, k) =>
+        c.map((v, i) => v + ((st.other[k] as Float32Array)[i] as number)),
+      ),
+      inRest: st.bass.map((c, k) =>
+        c.map((v, i) => v + ((st.vocals[k] as Float32Array)[i] as number)),
+      ),
+    });
+    const voices = [
+      { v: h.stems.out, p: parts(stemAudio.out), trimDb: outTrim, rest: "outRest" },
+      { v: h.stems.in, p: parts(stemAudio.in), trimDb: inTrim, rest: "inRest" },
+    ];
+    for (const { v, p, trimDb, rest } of voices)
+      for (const [part, schedule] of Object.entries(v.gain) as [string, Schedule][]) {
+        const src = p[part === "rest" ? rest : part];
+        if (!src) continue;
+        const at = Math.round(v.at * SR);
+        const n = Math.max(1, Math.min(frames - at, Math.round((v.stopAt - v.at) * SR)));
+        const played = stretchDeck(src, Math.round(v.offset * SR), n, SR, () => v.rate);
+        const buf = ctx.createBuffer(2, frames, SR);
+        for (let c = 0; c < 2; c++) {
+          const full = new Float32Array(frames);
+          full.set(
+            (played[Math.min(c, played.length - 1)] as Float32Array).subarray(0, frames - at),
+            at,
+          );
+          buf.copyToChannel(full, c);
+        }
+        const source = ctx.createBufferSource();
+        source.buffer = buf;
+        const level = ctx.createGain();
+        level.gain.value = 10 ** (trimDb / 20);
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        source.connect(level);
+        level.connect(gain);
+        gain.connect(master);
+        apply(gain.gain, at0(schedule));
+        source.start(0);
+      }
+  }
   const out = await ctx.startRendering();
   const mix = [0, 1].map((c) => new Float32Array(out.getChannelData(c)));
 
@@ -443,6 +536,7 @@ export async function renderHandOver(
       keys: `${camelotLabel(ka)} → ${camelotLabel(kb)}`,
       keySteps: ka && kb ? keySteps(ka, kb) : null,
       style: h.style,
+      stems: Boolean(h.stems),
       points: {
         mode: chosen ? "chosen" : "analysed",
         outS: r1(startAt + when),

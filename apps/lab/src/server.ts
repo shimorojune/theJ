@@ -52,7 +52,8 @@ async function transition(q: URLSearchParams) {
       Number(q.get("loop") ?? 8) > 0
         ? { beats: Number(q.get("loop") ?? 8), roll: q.get("roll") === "1" }
         : null,
-    from: at + 5,
+    // Time to separate stems and render before the earliest point it may pick.
+    from: at + 8,
     startAt: at + 0.3,
     post: EASE_BACK_S + 3.5,
   });

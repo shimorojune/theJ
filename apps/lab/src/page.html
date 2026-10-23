@@ -269,7 +269,7 @@ function showScore(s) {
   const lv = s.levels;
   const rows = [
     ["From", s.a], ["Into", s.b],
-    ["Switch", s.style],
+    ["Switch", `${s.style}${s.stems ? ", stem by stem (drums, then bass and music, vocals last)" : ""}`],
     ["Where", `out at ${mmss(s.points.outS)}, in at ${mmss(s.points.inS)} (${s.points.mode}), waited ${s.points.waitS} s`],
     ["Levels", lv.out == null ? `trims ${lv.outTrim} / ${lv.inTrim} dB` : `${lv.out} dB vs ${lv.in} dB over the overlap (trims ${lv.outTrim} / ${lv.inTrim} dB)`],
     ["Tempo", `${s.bpm} bpm, rate ${s.rate}${s.rate === 1 ? " (not matched)" : ` (${((s.rate - 1) * 100).toFixed(1)}%)`}`],

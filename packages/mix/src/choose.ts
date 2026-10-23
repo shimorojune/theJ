@@ -15,6 +15,8 @@ export type Features = {
   duration: number;
   mixInS?: number | null;
   mixOutS?: number | null;
+  /** How much of each beat has singing in it, 0 to 1 (beatActivity on a vocal stem); optional. */
+  vocals?: number[] | null;
 };
 
 export type ChooseOptions = {
@@ -74,6 +76,24 @@ export function beatLoudness(
     for (const ch of channels) for (let k = a; k < b; k += 4) sum += (ch[k] as number) ** 2;
     const n = Math.max(1, Math.ceil((b - a) / 4) * channels.length);
     return 10 * Math.log10(sum / n + 1e-10);
+  });
+}
+
+/**
+ * How much of each beat a stem is active, 0 to 1: the share of its envelope frames (dB, `hz`
+ * per second) within 18 dB of the stem's loud passages (its 90th percentile).
+ */
+export function beatActivity(env: number[], hz: number, beats: number[]): number[] {
+  const sorted = env.filter((v) => v > -90).sort((x, y) => x - y);
+  const loud = sorted[Math.floor(sorted.length * 0.9)] ?? -20;
+  const on = loud - 18;
+  return beats.map((t, i) => {
+    const next = beats[i + 1] ?? t + 0.5;
+    const a = Math.floor(t * hz);
+    const b = Math.max(a + 1, Math.floor(next * hz));
+    let n = 0;
+    for (let k = a; k < b; k++) if ((env[k] ?? -120) > on) n++;
+    return n / (b - a);
   });
 }
 
@@ -155,6 +175,9 @@ const nearest = (beats: number[], t: number) => {
  *     equally loud, but the floor goes quiet), or the outgoing song having just dropped into it
  *   + how far the incoming song, alone after the switch, sits below the outgoing one
  *   + beat wobble in either window (a steady grid is what makes the beats lock)
+ *   + with vocal activity for both: the two songs singing over each other during the blend,
+ *     the outgoing song mid-line at the switch, the incoming one mid-line when it takes over
+ *     (a DJ switches in the gaps between vocal lines)
  *   + a pair too far apart in tempo to match
  *   + a little for every second waited, and for every second of the incoming song skipped.
  * Null when either song has too few beats to mix on.
@@ -215,6 +238,18 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
       // longer averages miss.
       const atSwitch = mean(b.loud, j + o.plan.in - 4, j + o.plan.in + 8) + inTrim;
       const matched = matchRate(ga.beat, 1, gb.beat) !== 1 || Math.abs(ga.beat - gb.beat) < 1e-4;
+      // Singing: A's loop region (or what it plays on) against B's blend window, beat by beat.
+      let vocalCost = 0;
+      if (a.vocals && b.vocals) {
+        const va = (k: number) => a.vocals?.[i + (o.loopBeats ? k % o.loopBeats : k)] ?? 0;
+        const vb = (k: number) => b.vocals?.[j + k] ?? 0;
+        let both = 0;
+        for (let k = 0; k < o.plan.in; k++) both += va(k) * vb(k);
+        const blend = o.plan.in ? both / o.plan.in : 0;
+        const aAtSwitch = (va(o.plan.in - 2) + va(o.plan.in - 1)) / 2;
+        const bMidLine = vb(o.plan.in - 1) * vb(o.plan.in);
+        vocalCost = blend * 6 + aAtSwitch * 3 + bMidLine * 2;
+      }
       const outS = ga.t;
       const inS = gb.t;
       const cost =
@@ -226,6 +261,7 @@ export function chooseMixPoints(a: Features, b: Features, o: ChooseOptions): Mix
         Math.max(0, la - atSwitch - 1.5) +
         (ga.jitterMs + gb.jitterMs) / 5 +
         (matched ? 0 : 6) +
+        vocalCost +
         0.04 * Math.max(0, outS - o.from) +
         0.02 * inS;
       if (!best || cost < best.cost)
