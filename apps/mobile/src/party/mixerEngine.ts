@@ -30,6 +30,8 @@ import type { Engine, EngineStatus, TrackChange } from "./engine";
 
 /** How far ahead of the mix point the next song must be decoded. */
 const PRELOAD_AHEAD_S = 90;
+/** Shift the incoming song's key toward the outgoing one's (off: see mixInto). */
+const KEY_SHIFT = false;
 /** The outgoing loop of a planned mix (planHandOver): two bars. */
 const OUT_LOOP = { beats: 8, roll: false };
 
@@ -625,6 +627,7 @@ export class MixerEngine implements Engine {
       rate = matchRate(curBeat, this.rateAt(cur, when), inBeat);
     const sameTempo = curBeat != null && inBeat != null && Math.abs(curBeat - inBeat) < 1e-4;
     const offset = deck.kind === "full" ? (deck.song.mixInS ?? 0) : 0;
+    const stems = reason === "complete" && cur ? this.stemInput(cur, deck) : null;
     const h = planHandOver({
       when,
       plan,
@@ -632,12 +635,16 @@ export class MixerEngine implements Engine {
       rate,
       inOffset: offset,
       master: cur ? this.master.gain.value : null,
-      stems: reason === "complete" && cur ? this.stemInput(cur, deck) : null,
+      stems,
       // Tempos too far apart to match: echo the old song out and drop the new one on the one.
       style:
         cur?.kind === "full" && deck.kind === "full" && rate === 1 && !sameTempo ? "echo" : "blend",
-      // Into a key that sits with the outgoing song's, eased back after.
-      detune: reason === "complete" && cur ? keyShift(cur.song, deck.song) * 100 : 0,
+      // Key shifting is off: this stretcher pitch-shifts music badly (heard as distortion in the
+      // lab). KEY_SHIFT turns it back on; never with stems (each stem has its own stretcher).
+      detune:
+        KEY_SHIFT && reason === "complete" && cur && !stems
+          ? keyShift(cur.song, deck.song) * 100
+          : 0,
       // A planned mix loops the outgoing song from the mix point.
       loop: reason === "complete" && cur?.kind === "full" ? OUT_LOOP : null,
       outPos: cur ? this.positionAt(cur, when) : undefined,

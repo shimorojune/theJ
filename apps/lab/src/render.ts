@@ -119,7 +119,11 @@ export type RenderOptions = {
   trim?: boolean;
   /** Loop the outgoing song from the mix point (planHandOver). Default 8 beats, no roll. */
   loop?: { beats: number; roll?: boolean } | null;
-  /** Shift the incoming song into a key that sits with the outgoing one. Default on. */
+  /**
+   * Shift the incoming song into a key that sits with the outgoing one. Off by default: the
+   * phone's stretcher pitch-shifts music badly (about 5 dB of spectral error at 2 semitones,
+   * against 1 dB for a 12% tempo change; Rohit heard it as "fully distorted").
+   */
   keyMatch?: boolean;
   /** Hand over stem by stem (blend only); default on when the mix lab's Python is present. */
   stems?: boolean;
@@ -314,19 +318,18 @@ export async function renderHandOver(
   // Stems for the stretch either side of the switch: the outgoing song from a beat before the
   // incoming one starts, the incoming one from its start, both past the end of the tail.
   let stemInput: StemInput | null = null;
-  let stemAudio: { out: Stems; in: Stems } | null = null;
+  let stemAudio: { out: Stems; in: Stems | null } | null = null;
   if (useStems && style === "blend") {
     const inS = Math.min(14, plan.in * beat);
     const tailS = plan.out > 0 ? Math.min(8, plan.out * beat) : TAIL_BEATS * beat;
     const outStart = Math.max(0, startAt + when - beat - 0.5);
     const outLen = inS + tailS + 3 * beat + 1;
-    const inStart = Math.max(0, inOffset - 0.25);
+    // The incoming stems are split later, from the incoming deck as stretched and shifted:
+    // each stem through a stretcher of its own would part from the others (heard as distortion
+    // once the pitch moves).
+    const inStart = inOffset;
     const inLen = (inS + tailS + 3 * beat) * matchedRate + 1;
-    const [so, si] = await Promise.all([
-      separate(a.songId, xa, SR, outStart, outLen),
-      separate(b.songId, xb, SR, inStart, inLen),
-    ]);
-    stemAudio = { out: so, in: si };
+    stemAudio = { out: await separate(a.songId, xa, SR, outStart, outLen), in: null };
     stemInput = {
       now: 0,
       outPosAt: (t) => startAt + t,
@@ -338,7 +341,7 @@ export async function renderHandOver(
     };
   }
   // Into a key that sits with the outgoing one (a semitone or two), eased back after.
-  const shift = opts.keyMatch === false ? 0 : keyShift(a, b);
+  const shift = opts.keyMatch === true ? keyShift(a, b) : 0;
   const h = planHandOver({
     when,
     plan,
@@ -375,6 +378,19 @@ export async function renderHandOver(
     (f) =>
       ease?.detune ? valueAt(ease.detune, when + f / SR, h.incoming.detune) : h.incoming.detune,
   );
+  if (h.stems && stemAudio) {
+    const len = Math.min(
+      deckBRaw[0]?.length ?? 0,
+      Math.round((h.stems.in.stopAt - when + 0.5) * SR),
+    );
+    stemAudio.in = await separate(
+      `${b.songId}@${inOffset.toFixed(3)}:${rate}:${h.incoming.detune}`,
+      deckBRaw.map((c) => c.subarray(0, len)),
+      SR,
+      0,
+      len / SR,
+    );
+  }
   const deckB = deckBRaw.map((c) => {
     const full = new Float32Array(frames);
     full.set(c, whenF);
@@ -458,8 +474,9 @@ export async function renderHandOver(
   A.source.start(0);
   A.source.stop(h.outgoing?.stopAt ?? total);
   B.source.start(0);
-  if (h.stems && stemAudio) {
-    // Each stem as a voice of its own, through the same stretcher and trim as its deck.
+  if (h.stems && stemAudio?.in) {
+    // Each stem as a voice of its own with its deck's trim; the outgoing ones through the same
+    // stretcher as their deck, the incoming ones already stretched (split from the deck).
     const parts = (st: Stems): Record<string, Float32Array[]> => ({
       drums: st.drums,
       bass: st.bass,
@@ -474,24 +491,18 @@ export async function renderHandOver(
       ),
     });
     const voices = [
-      { v: h.stems.out, p: parts(stemAudio.out), trimDb: outTrim, rest: "outRest" },
-      { v: h.stems.in, p: parts(stemAudio.in), trimDb: inTrim, rest: "inRest" },
+      { v: h.stems.out, p: parts(stemAudio.out), trimDb: outTrim, rest: "outRest", ready: false },
+      { v: h.stems.in, p: parts(stemAudio.in), trimDb: inTrim, rest: "inRest", ready: true },
     ];
-    for (const { v, p, trimDb, rest } of voices)
+    for (const { v, p, trimDb, rest, ready } of voices)
       for (const [part, schedule] of Object.entries(v.gain) as [string, Schedule][]) {
         const src = p[part === "rest" ? rest : part];
         if (!src) continue;
         const at = Math.round(v.at * SR);
         const n = Math.max(1, Math.min(frames - at, Math.round((v.stopAt - v.at) * SR)));
-        const cents = v === h.stems.in ? h.incoming.detune : 0;
-        const played = stretchDeck(
-          src,
-          Math.round(v.offset * SR),
-          n,
-          SR,
-          () => v.rate,
-          () => cents,
-        );
+        const played = ready
+          ? src.map((c) => c.subarray(Math.round(v.offset * SR), Math.round(v.offset * SR) + n))
+          : stretchDeck(src, Math.round(v.offset * SR), n, SR, () => v.rate);
         const buf = ctx.createBuffer(2, frames, SR);
         for (let c = 0; c < 2; c++) {
           const full = new Float32Array(frames);

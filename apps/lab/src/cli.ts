@@ -39,6 +39,7 @@ const { positionals, values } = parseArgs({
     analysed: { type: "boolean", default: false },
     loop: { type: "string", default: "8" },
     style: { type: "string", default: "auto" },
+    "key-match": { type: "boolean", default: false },
     roll: { type: "boolean", default: false },
     from: { type: "string" },
     port: { type: "string", default: "4400" },
@@ -114,6 +115,7 @@ async function main() {
     // --loop 0 for none; --no-roll keeps the loop but skips the roll into the swap.
     loop: Number(values.loop) > 0 ? { beats: Number(values.loop), roll: values.roll } : null,
     style: values.style as "auto" | "blend" | "filter" | "cut" | "echo",
+    keyMatch: values["key-match"],
   };
   if (cmd === "render") {
     const [qa, qb] = args;
