@@ -35,6 +35,7 @@ import {
 import { OfflineAudioContext } from "node-web-audio-api";
 import { audioPath, type LabSong } from "./data";
 import { barLags, ENV_HZ, loudness, median, onsetEnvelope, peakDb } from "./metrics";
+import { signalsmithDeck } from "./signalsmith";
 import { type Stems, separate, stemEnvelopes, stemsAvailable } from "./stems";
 import { stretchDeck } from "./wsola";
 
@@ -125,6 +126,11 @@ export type RenderOptions = {
    * against 1 dB for a 12% tempo change; Rohit heard it as "fully distorted").
    */
   keyMatch?: boolean;
+  /**
+   * What stretches the incoming deck: "phone" (default), react-native-audio-api's WSOLA as the
+   * app has it today; "signalsmith", the library the app could ship (and key matching with it).
+   */
+  stretcher?: "phone" | "signalsmith";
   /** Hand over stem by stem (blend only); default on when the mix lab's Python is present. */
   stems?: boolean;
   /** How to switch; "auto" (default) lets chooseStyle pick from the pair. */
@@ -341,7 +347,7 @@ export async function renderHandOver(
     };
   }
   // Into a key that sits with the outgoing one (a semitone or two), eased back after.
-  const shift = opts.keyMatch === true ? keyShift(a, b) : 0;
+  const shift = (opts.keyMatch ?? opts.stretcher === "signalsmith") ? keyShift(a, b) : 0;
   const h = planHandOver({
     when,
     plan,
@@ -369,15 +375,37 @@ export async function renderHandOver(
   );
   const whenF = Math.round(when * SR);
   const ease = h.incoming.easeBack;
-  const deckBRaw = stretchDeck(
-    xb,
-    Math.round(inOffset * SR),
-    frames - whenF,
-    SR,
-    (f) => (ease ? valueAt(ease.rate, when + f / SR, rate) : rate),
-    (f) =>
-      ease?.detune ? valueAt(ease.detune, when + f / SR, h.incoming.detune) : h.incoming.detune,
-  );
+  const deckBRaw =
+    opts.stretcher === "signalsmith"
+      ? // Rendered by Signalsmith, then played at rate 1 through the phone's source as the app
+        // would play a pre-stretched buffer (so it has the same start latency as deck A).
+        stretchDeck(
+          await signalsmithDeck(
+            xb,
+            Math.round(inOffset * SR),
+            frames - whenF,
+            SR,
+            rate,
+            h.incoming.detune / 100,
+            ease ? (ease.at - when) * SR : 0,
+            ease ? (ease.at + ease.dur - when) * SR : 0,
+          ),
+          0,
+          frames - whenF,
+          SR,
+          () => 1,
+        )
+      : stretchDeck(
+          xb,
+          Math.round(inOffset * SR),
+          frames - whenF,
+          SR,
+          (f) => (ease ? valueAt(ease.rate, when + f / SR, rate) : rate),
+          (f) =>
+            ease?.detune
+              ? valueAt(ease.detune, when + f / SR, h.incoming.detune)
+              : h.incoming.detune,
+        );
   if (h.stems && stemAudio) {
     const len = Math.min(
       deckBRaw[0]?.length ?? 0,

@@ -39,7 +39,8 @@ const { positionals, values } = parseArgs({
     analysed: { type: "boolean", default: false },
     loop: { type: "string", default: "8" },
     style: { type: "string", default: "auto" },
-    "key-match": { type: "boolean", default: false },
+    "key-match": { type: "boolean" },
+    signalsmith: { type: "boolean", default: false },
     roll: { type: "boolean", default: false },
     from: { type: "string" },
     port: { type: "string", default: "4400" },
@@ -116,6 +117,7 @@ async function main() {
     loop: Number(values.loop) > 0 ? { beats: Number(values.loop), roll: values.roll } : null,
     style: values.style as "auto" | "blend" | "filter" | "cut" | "echo",
     keyMatch: values["key-match"],
+    stretcher: values.signalsmith ? ("signalsmith" as const) : ("phone" as const),
   };
   if (cmd === "render") {
     const [qa, qb] = args;
